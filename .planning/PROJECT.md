@@ -22,9 +22,12 @@ Automate and normalize product data ingestion from diverse formats into structur
 
 - [ ] Support URL and file upload ingestion (PDF, DOC/DOCX, HTML).
 - [ ] Convert source inputs to Markdown via Python MarkItDown microservice.
+- [ ] Perform logical/AI website crawl and structure discovery (sitemaps, robots.txt, llms.txt, schema.org tags).
+- [ ] Provide a category/product selection tree UI in the Polaris app interface.
 - [ ] Extract product name, SKU, UPC, images, descriptions, and specs with LLM.
+- [ ] Detect and flag purchase type (direct buy vs. quote-only basis).
 - [ ] Normalize units (e.g. `25KG` -> `value: 25, unit: KG, system: metric`).
-- [ ] Detect variant options, product lines/series, and map to Shopify structures.
+- [ ] Intelligently cluster and map product variants if SKU, name, or series patterns match.
 - [ ] Implement embedded Shopify App shell (React Router + Polaris).
 - [ ] Provide review UI with completeness scoring, collection suggestions, and metafield mappings.
 
@@ -53,6 +56,7 @@ Automate and normalize product data ingestion from diverse formats into structur
 - **Data Modeling**: All custom specifications must have Metafield Definitions generated before applying data to products.
 - **Microservices**: Python environment needed for MarkItDown — Python library doesn't easily run in Node natively.
 - **Performance**: Must be fast enough for synchronous merchant review workflows.
+- **Web Crawling**: Must respect `robots.txt` directives and implement polite rate-limiting/throttling to prevent IP bans.
 
 ## Key Decisions
 

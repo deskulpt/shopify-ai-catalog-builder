@@ -32,6 +32,8 @@ Merchants receive product data in PDFs, DOC/DOCX, HTML pages, spreadsheets, and 
 8. **Bulk import:** Prepare payloads for bulk creation or staged review before publishing.
 9. **Duplicate detection:** Detect likely duplicates using SKU, UPC, and name similarity.
 10. **Re-ingestion:** Reprocess a source file after rules or models are updated.
+11. **Vendor Site Crawl & Scrape:** Crawl a vendor website and parse sitemaps, robots.txt, llms.txt, and HTML schema tags to construct a category taxonomy and product list.
+12. **Quote-Only Identification:** Automatically detect whether a product is direct-buy or quote-only, and tag or map it to a specific Shopify metafield definition.
 
 ## Functional Requirements
 ### Ingestion
@@ -39,12 +41,15 @@ Merchants receive product data in PDFs, DOC/DOCX, HTML pages, spreadsheets, and 
 - Accept URL input.
 - Support PDF, DOC/DOCX, and HTML.
 - Convert all source inputs to Markdown through MarkItDown. MarkItDown supports file-to-Markdown conversion workflows and CLI-based document processing. [web:1][web:5]
+- Discover site structure using a hybrid approach: check for `robots.txt`, `sitemap.xml`, `llms.txt`, and parse `schema.org` markup (JSON-LD, microdata) on category/product list pages to identify categories and products.
+- Provide a Polaris UI category tree/list allowing the merchant to select which categories or specific products to scrape.
 
 ### Extraction
 - Extract product name, SKU, UPC, handle, images, descriptions, and specs.
 - Normalize units and parse expressions such as `25KG` into structured fields.
 - Detect variant options and product line patterns.
 - Return structured JSON with source references.
+- Detect purchase type (direct buy vs. quote-only/RFQ basis).
 
 ### Shopify Mapping
 - Match extracted products against existing products and collections.
@@ -79,6 +84,8 @@ Merchants receive product data in PDFs, DOC/DOCX, HTML pages, spreadsheets, and 
 - Metafield mappings.
 - Completeness score.
 - Source document references.
+- Purchase type (`direct_buy` or `quote_only`).
+- Parent series / product mapping candidate reference.
 
 ### Specification Definition
 A specification is a normalized attribute extracted from the source text and stored with:
