@@ -1,38 +1,91 @@
 # Roadmap: Product Ingest AI
 
+## Overview
+
+Automate and normalize product data ingestion from diverse formats (files, URLs, vendor sites) into structured Shopify draft products using Python-native MarkItDown conversion, crawler structure discovery, and LLM-based extraction.
+
 ## Phases
 
-### 1. Phase 1: Hello World & Service Architecture
-**Goal:** Scaffolding the basic services and Shopify connection.
-- Set up Dev store and Partner account.
-- Scaffold React Router + Node app using Shopify CLI.
-- Build Python MarkItDown microservice with Flask.
-- Expose the "Hello World" UI in the embedded admin.
+- [x] **Phase 1: Hello World & Service Architecture** - Scaffold React Router + Node app and Python microservice. (completed 2026-06-07)
+- [ ] **Phase 2: Ingestion & Conversion** - Accept files/URLs, discover vendor site categories/products, and select target content.
+- [ ] **Phase 3: AI Extraction & Mapping** - Run LLM on Markdown, normalize units, group variants, and detect purchase type.
+- [ ] **Phase 4: Review UI & Shopify Integration** - Review drafts, map metafields, and publish to Shopify.
 
-### 2. Phase 2: Ingestion & Conversion
-**Goal:** Accept files and URLs, crawl websites, and return structured Markdown/site-maps.
-- Build drag-and-drop file upload UI using native `<s-drop-zone>`.
-- Build URL input UI using `<s-url-field>`.
-- Build crawler/discovery backend to parse `robots.txt`, `sitemap.xml`, `llms.txt`, and HTML `schema.org` data.
-- Build Polaris Category & Product Selection Tree UI using native Polaris Web Components.
-- Node.js routes to handle upload/URL submission and trigger crawling.
-- Integration between Node.js and Python MarkItDown service.
-- Display raw Markdown preview.
+## Phase Details
 
-### 3. Phase 3: AI Extraction & Mapping
-**Goal:** Parse Markdown and crawled structure into structured JSON, mapping variants and purchase types.
-- Implement LLM service layer.
-- Prompt engineering for specification extraction, unit normalization.
-- Variant and series detection logic.
-- Implement industrial product variant/series clustering engine using SKU/name patterns and LLM classification.
-- Implement quote-only vs. direct-buy detection logic.
-- Metafield Definition creation and matching logic (`shopify-custom-data`).
-- Completeness scoring utility.
+### Phase 1: Hello World & Service Architecture
 
-### 4. Phase 4: Review UI & Shopify Integration
-**Goal:** Present drafts, configure custom metafields, and publish to Shopify.
-- Build Product Draft review cards using Polaris App Home components.
-- Show completeness score, variants, purchase type (`direct_buy` vs `quote_only`), and collection suggestions.
-- Handle edits and validation warnings.
-- Automatically register required Metafield Definitions (including `custom.purchase_type`) in Shopify prior to product creation.
-- Execute optimal Shopify GraphQL mutations (e.g., `productSet`, `productVariantsBulkCreate`) to create products, variants, and metafields.
+**Goal**: Scaffold the basic services and Shopify connection.
+**Depends on**: Nothing
+**Success Criteria** (what must be TRUE):
+
+  1. Embedded Shopify app is installable on a development store.
+  2. Frontend renders a basic Hello World home screen.
+  3. Node.js backend can ping the Python Flask conversion microservice.
+
+**Plans**: 1 plan
+
+Plans:
+
+- [x] 01-01: Hello World App Scaffolding and Python service connection
+
+### Phase 2: Ingestion & Conversion
+
+**Goal**: Accept files and URLs, crawl websites, and return structured Markdown/site-maps.
+**Depends on**: Phase 1
+**Success Criteria** (what must be TRUE):
+
+  1. User can drag-and-drop a file (PDF/DOCX) and see a converted Markdown preview.
+  2. User can enter a URL and view the converted Markdown preview.
+  3. User can input a vendor domain to trigger a crawling process that parses sitemap, robots.txt, llms.txt, and schema.org data.
+  4. Polaris UI displays the discovered category taxonomy in a selection tree.
+
+**Plans**: 2 plans
+
+Plans:
+
+- [ ] 02-01: Drag-and-drop file upload and URL parsing
+- [ ] 02-02: Crawler discovery backend and Polaris Category Tree selection UI
+
+### Phase 3: AI Extraction & Mapping
+
+**Goal**: Parse Markdown and crawled structure into structured JSON, mapping variants and purchase types.
+**Depends on**: Phase 2
+**Success Criteria** (what must be TRUE):
+
+  1. LLM parses the Markdown content into structured product JSON matching the PRD data definitions.
+  2. Industrial products are automatically clustered into parent products and variants based on SKU, name, or series matches.
+  3. Extraction detects whether a product is direct-buy or quote-only.
+  4. Units are successfully normalized (e.g. 25KG -> value: 25, unit: KG).
+
+**Plans**: 2 plans
+
+Plans:
+
+- [ ] 03-01: LLM service layer with unit normalization
+- [ ] 03-02: Industrial product variant clustering and purchase type detection
+
+### Phase 4: Review UI & Shopify Integration
+
+**Goal**: Present drafts, configure custom metafields, and publish to Shopify.
+**Depends on**: Phase 3
+**Success Criteria** (what must be TRUE):
+
+  1. Review UI displays the product draft, variant matrix, and purchase type using native Polaris Web Components.
+  2. App automatically creates required Shopify Metafield Definitions before assigning product metafield values.
+  3. Approved products and variants are created in Shopify using efficient GraphQL mutations (e.g. `productVariantsBulkCreate`).
+
+**Plans**: 1 plan
+
+Plans:
+
+- [ ] 04-01: Polaris draft review UI and Shopify GraphQL publishing
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Hello World & Service Architecture | 1/1 | Complete    | 2026-06-07 |
+| 2. Ingestion & Conversion | 0/2 | Not started | - |
+| 3. AI Extraction & Mapping | 0/2 | Not started | - |
+| 4. Review UI & Shopify Integration | 0/1 | Not started | - |
