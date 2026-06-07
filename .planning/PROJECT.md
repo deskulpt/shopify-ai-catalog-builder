@@ -36,18 +36,21 @@ Automate and normalize product data ingestion from diverse formats into structur
 - [Duplicate detection at scale] — Future enhancement.
 - [Bundle detection/creation] — Future enhancement.
 - [Inventory forecasting] — Future enhancement.
+- [Admin Action Extensions] — MVP focuses purely on App Home. Embedding block extensions onto the Products page is deferred.
 
 ## Context
 
-- The frontend uses the Shopify app scaffold (React Router + Polaris).
-- The backend uses Node.js for Shopify auth and API coordination.
+- The frontend uses the Shopify app scaffold but implements UI using **native Polaris Web Components** (`<s-page>`, `<s-drop-zone>`) per `shopify-polaris-app-home` standards.
+- Metafields are strictly modeled using **Metafield Definitions** per `shopify-custom-data` standards prior to assignment.
+- The backend uses Node.js for Shopify auth and orchestrating the latest Admin GraphQL API mutations.
 - A separate Python microservice runs `markitdown[all]` via Flask to handle file conversions.
 - An LLM service processes the Markdown to output structured JSON with product details and source references.
 - Test Strategy requires unit testing parser/extractors, integration tests for API flows, and E2E for the full ingest-to-draft loop.
 
 ## Constraints
 
-- **Architecture**: Must use embedded app standards (React Router/Polaris) — Shopify recommended practice.
+- **Architecture**: Must use embedded app standards built with Polaris Web Components (`s-*` tags). Legacy `@shopify/polaris` React components are prohibited.
+- **Data Modeling**: All custom specifications must have Metafield Definitions generated before applying data to products.
 - **Microservices**: Python environment needed for MarkItDown — Python library doesn't easily run in Node natively.
 - **Performance**: Must be fast enough for synchronous merchant review workflows.
 

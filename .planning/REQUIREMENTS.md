@@ -16,6 +16,7 @@
 - Python service exposes `POST /convert` and `POST /convert-url`.
 - Node backend proxies requests and orchestrates LLM extraction.
 - Extraction accurately returns JSON matching the Product Draft data definitions.
-- Review UI displays the draft, variants, and completeness score using Polaris components.
-- Final approval pushes a Product and its Variants via Shopify GraphQL API (e.g. `productVariantsBulkCreate`).
+- Review UI displays the draft, variants, and completeness score using native Polaris Web Components (e.g., `<s-page>`, `<s-drop-zone>`).
+- Metafield Definitions are automatically created based on extracted specs before assigning values to products.
+- Final approval pushes a Product and its Variants using modern Shopify GraphQL Admin API mutations (e.g. `productVariantsBulkCreate`).
 - All tests (Unit, Integration, E2E) pass.

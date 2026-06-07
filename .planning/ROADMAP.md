@@ -11,8 +11,8 @@
 
 ### 2. Phase 2: Ingestion & Conversion
 **Goal:** Accept files and URLs and return Markdown.
-- Build drag-and-drop file upload UI.
-- Build URL input UI.
+- Build drag-and-drop file upload UI using native `<s-drop-zone>`.
+- Build URL input UI using `<s-url-field>`.
 - Node.js routes to handle upload/URL submission.
 - Integration between Node.js and Python MarkItDown service.
 - Display raw Markdown preview.
@@ -22,12 +22,12 @@
 - Implement LLM service layer.
 - Prompt engineering for specification extraction, unit normalization.
 - Variant and series detection logic.
-- Metafield matching logic.
+- Metafield Definition creation and matching logic (`shopify-custom-data`).
 - Completeness scoring utility.
 
 ### 4. Phase 4: Review UI & Shopify Integration
 **Goal:** Present drafts and publish to Shopify.
-- Build Product Draft review cards (Polaris).
+- Build Product Draft review cards using Polaris App Home components.
 - Show completeness score, variants, and collection suggestions.
 - Handle edits and validation warnings.
-- Execute Shopify GraphQL mutations to create products, variants, and metafields.
+- Execute optimal Shopify GraphQL mutations (e.g., `productSet`, `productVariantsBulkCreate`) to create products, variants, and metafields.
