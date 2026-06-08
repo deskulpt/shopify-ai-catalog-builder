@@ -63,7 +63,7 @@ export default function Index() {
 
   const selectedSource = queuedSources.find(s => s.id === selectedSourceId);
 
-  // Detect if selected source likely contains multiple products
+  // Detect if selected source likely contains multiple products and trigger extraction
   useEffect(() => {
     if (selectedSource?.markdown) {
       setEditingMarkdown(selectedSource.markdown);
@@ -72,9 +72,13 @@ export default function Index() {
       const skuMatches = (selectedSource.markdown.match(/sku/gi) || []).length;
       const modelMatches = (selectedSource.markdown.match(/model/gi) || []).length;
       setIsMultiProduct(skuMatches > 2 || modelMatches > 2);
+
+      // Trigger field extraction automatically
+      runExtraction(selectedSource.markdown, selectedSource.domain);
     } else {
       setEditingMarkdown("");
       setIsMultiProduct(false);
+      setExtractedProduct(null);
     }
   }, [selectedSourceId, selectedSource?.markdown]);
 
@@ -327,6 +331,102 @@ export default function Index() {
     });
   };
 
+  // Grouping & Extraction States
+  const [groupSimilar, setGroupSimilar] = useState(false);
+  const [isGrouping, setIsGrouping] = useState(false);
+  const [groupedCategories, setGroupedCategories] = useState<Record<string, any[]>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  const [extractedProduct, setExtractedProduct] = useState<any | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+
+  const handleGroupToggle = async (checked: boolean) => {
+    setGroupSimilar(checked);
+    if (!checked || !crawlResult) return;
+
+    setIsGrouping(true);
+    const newGroupedCats: Record<string, any[]> = {};
+
+    try {
+      for (const category of crawlResult.categories) {
+        const catProducts = category.products || [];
+        if (catProducts.length <= 1) {
+          newGroupedCats[category.name] = catProducts.map((p: any) => ({
+            title: p.name,
+            is_grouped: false,
+            variants: [p]
+          }));
+          continue;
+        }
+
+        const res = await fetch("/api/group-variants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ products: catProducts }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          newGroupedCats[category.name] = data.grouped;
+        } else {
+          newGroupedCats[category.name] = catProducts.map((p: any) => ({
+            title: p.name,
+            is_grouped: false,
+            variants: [p]
+          }));
+        }
+      }
+      setGroupedCategories(newGroupedCats);
+    } catch (err) {
+      shopify.toast.show("Error grouping variants");
+    } finally {
+      setIsGrouping(false);
+    }
+  };
+
+  const toggleGroupExpand = (groupTitle: string) => {
+    setExpandedGroups(prev => ({
+      ...prev,
+      [groupTitle]: !prev[groupTitle]
+    }));
+  };
+
+  const handleGroupSelectToggle = (group: any, checked: boolean) => {
+    const groupUrls = (group.variants || []).map((v: any) => v.url);
+    if (checked) {
+      setSelectedProducts(prev => {
+        const next = [...prev];
+        groupUrls.forEach((url: string) => {
+          if (!next.includes(url)) next.push(url);
+        });
+        return next;
+      });
+    } else {
+      setSelectedProducts(prev => prev.filter(url => !groupUrls.includes(url)));
+    }
+  };
+
+  const runExtraction = async (mdContent: string, domainStr?: string) => {
+    setIsExtracting(true);
+    setExtractedProduct(null);
+    try {
+      const res = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markdown: mdContent, domain: domainStr }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setExtractedProduct(data);
+      } else {
+        shopify.toast.show(`Extraction failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      shopify.toast.show(`Extraction error: ${err.message}`);
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
   return (
     <s-page heading="Product Ingest AI">
       <s-button 
@@ -517,6 +617,23 @@ export default function Index() {
               <s-heading>Discovered Categories & Products</s-heading>
               <s-paragraph>Select which categories or specific products to scrape and queue:</s-paragraph>
 
+              {/* Grouping Toggle Option */}
+              <s-box padding="small" background="subdued" borderRadius="base" style={{ marginBottom: "15px" }}>
+                <s-stack direction="inline" gap="base" align-items="center">
+                  <input
+                    type="checkbox"
+                    id="group-toggle"
+                    checked={groupSimilar}
+                    onChange={(e) => handleGroupToggle(e.target.checked)}
+                    style={{ cursor: "pointer", width: "16px", height: "16px" }}
+                  />
+                  <label htmlFor="group-toggle" style={{ cursor: "pointer", fontWeight: "bold" }}>
+                    Intelligently group similar series / variants (by SKU prefix & name similarity)
+                  </label>
+                  {isGrouping && <s-spinner size="base" accessibility-label="Grouping variants..."></s-spinner>}
+                </s-stack>
+              </s-box>
+
               <div style={{ paddingLeft: "10px" }}>
                 {crawlResult.categories.map((category: any) => {
                   const isCatExpanded = !!expandedCategories[category.name];
@@ -550,24 +667,105 @@ export default function Index() {
                       </div>
 
                       {isCatExpanded && (
-                        <div style={{ paddingLeft: "45px", marginTop: "8px" }}>
-                          {catProducts.map((prod: any) => {
-                            const isChecked = selectedProducts.includes(prod.url);
-                            return (
-                              <div key={prod.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={() => handleProductSelectToggle(prod.url)}
-                                  style={{ cursor: "pointer" }}
-                                />
-                                <s-stack direction="block">
-                                  <s-text>{prod.name}</s-text>
-                                  <s-text variant="bodySm" color="subdued">{prod.url}</s-text>
-                                </s-stack>
-                              </div>
-                            );
-                          })}
+                        <div style={{ paddingLeft: "30px", marginTop: "8px" }}>
+                          {groupSimilar ? (
+                            (groupedCategories[category.name] || []).map((group: any) => {
+                              if (group.is_grouped) {
+                                const isGroupExpanded = !!expandedGroups[group.title];
+                                const groupUrls = group.variants.map((v: any) => v.url);
+                                const selectedInGroup = selectedProducts.filter(url => groupUrls.includes(url));
+                                const isAllGroupSelected = selectedInGroup.length === groupUrls.length;
+                                const isSomeGroupSelected = selectedInGroup.length > 0 && !isAllGroupSelected;
+
+                                return (
+                                  <div key={group.title} style={{ margin: "10px 0", paddingLeft: "15px", borderLeft: "2px solid #ccc" }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                      <s-button
+                                        variant="tertiary"
+                                        icon={isGroupExpanded ? "chevron-up" : "chevron-down"}
+                                        onClick={() => toggleGroupExpand(group.title)}
+                                      />
+                                      <input
+                                        type="checkbox"
+                                        checked={isAllGroupSelected}
+                                        ref={el => {
+                                          if (el) el.indeterminate = isSomeGroupSelected;
+                                        }}
+                                        onChange={(e) => handleGroupSelectToggle(group, e.target.checked)}
+                                        style={{ cursor: "pointer", width: "14px", height: "14px" }}
+                                      />
+                                      <s-stack direction="inline" gap="tight" align-items="center">
+                                        <s-text type="strong">{group.title}</s-text>
+                                        <s-badge tone="info">{group.variants.length} Variants</s-badge>
+                                        {group.options && group.options.map((opt: string) => (
+                                          <s-chip key={opt} size="base">{opt}</s-chip>
+                                        ))}
+                                      </s-stack>
+                                    </div>
+
+                                    {isGroupExpanded && (
+                                      <div style={{ paddingLeft: "45px", marginTop: "6px" }}>
+                                        {group.variants.map((variant: any) => {
+                                          const isChecked = selectedProducts.includes(variant.url);
+                                          return (
+                                            <div key={variant.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => handleProductSelectToggle(variant.url)}
+                                                style={{ cursor: "pointer" }}
+                                              />
+                                              <s-stack direction="block">
+                                                <s-text>{variant.name}</s-text>
+                                                <s-text variant="bodySm" color="subdued">
+                                                  {variant.url} {variant.option_values && `| Option: ${JSON.stringify(variant.option_values)}`}
+                                                </s-text>
+                                              </s-stack>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              } else {
+                                const standalone = group.variants[0];
+                                const isChecked = selectedProducts.includes(standalone.url);
+                                return (
+                                  <div key={standalone.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0", paddingLeft: "15px" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleProductSelectToggle(standalone.url)}
+                                      style={{ cursor: "pointer" }}
+                                    />
+                                    <s-stack direction="block">
+                                      <s-text>{standalone.name}</s-text>
+                                      <s-text variant="bodySm" color="subdued">{standalone.url}</s-text>
+                                    </s-stack>
+                                  </div>
+                                );
+                              }
+                            })
+                          ) : (
+                            catProducts.map((prod: any) => {
+                              const isChecked = selectedProducts.includes(prod.url);
+                              return (
+                                <div key={prod.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => handleProductSelectToggle(prod.url)}
+                                    style={{ cursor: "pointer" }}
+                                  />
+                                  <s-stack direction="block">
+                                    <s-text>{prod.name}</s-text>
+                                    <s-text variant="bodySm" color="subdued">{prod.url}</s-text>
+                                  </s-stack>
+                                </div>
+                              );
+                            })
+                          )}
                         </div>
                       )}
                     </div>
@@ -707,31 +905,86 @@ export default function Index() {
                   />
                 </div>
 
-                {/* Right: Mock Schema Mapping / Schema Lock */}
+                {/* Right: AI Schema Mapping & Extraction Preview */}
                 <div style={{ flex: 1, minWidth: "300px" }}>
-                  <s-heading>Live Schema Mapping Preview</s-heading>
-                  <s-box padding="base" borderWidth="base" borderRadius="base" style={{ marginTop: "8px" }}>
-                    <s-stack direction="block" gap="tight">
-                      <s-paragraph><strong>Product Title:</strong> Inferred from Heading 1</s-paragraph>
-                      <s-paragraph><strong>Product Name:</strong> Inferred from Heading 1</s-paragraph>
-                      <s-paragraph><strong>SKU:</strong> Inferred from model numbers</s-paragraph>
-                      <s-paragraph><strong>Price:</strong> Inferred from direct buy indicators</s-paragraph>
-                      <s-paragraph><strong>Image:</strong> First found image tag</s-paragraph>
-                      <s-paragraph><strong>Technical Drawing:</strong> Extracted CAD/Image reference</s-paragraph>
-                      <s-paragraph><strong>Variant Options:</strong> Column headers (e.g. Size, Voltage)</s-paragraph>
-                      <s-paragraph><strong>Variant Option Values:</strong> Row cells</s-paragraph>
-                      <s-paragraph><strong>Specifications:</strong> Properties lists (e.g. Weight, Material)</s-paragraph>
-                    </s-stack>
-                  </s-box>
+                  <s-heading>AI Schema Mapping Preview</s-heading>
+                  
+                  {isExtracting && (
+                    <s-box padding="base" style={{ textAlign: "center" }}>
+                      <s-spinner size="base" accessibility-label="Extracting fields..."></s-spinner>
+                      <s-paragraph style={{ marginTop: "10px" }}>Running parser extraction and unit normalization...</s-paragraph>
+                    </s-box>
+                  )}
+
+                  {!isExtracting && extractedProduct && (
+                    <s-box padding="base" borderWidth="base" borderRadius="base" style={{ marginTop: "8px" }}>
+                      <s-stack direction="block" gap="base">
+                        <s-stack direction="inline" gap="base" align-items="center">
+                          <s-text type="strong">Title:</s-text>
+                          <s-text>{extractedProduct.title}</s-text>
+                        </s-stack>
+                        <s-stack direction="inline" gap="base" align-items="center">
+                          <s-text type="strong">SKU:</s-text>
+                          <s-text>{extractedProduct.sku}</s-text>
+                        </s-stack>
+                        <s-stack direction="inline" gap="base" align-items="center">
+                          <s-text type="strong">Purchase Type:</s-text>
+                          <s-badge tone={extractedProduct.purchase_type === "quote_only" ? "warning" : "success"}>
+                            {extractedProduct.purchase_type === "quote_only" ? "QUOTE ONLY (RFQ)" : "DIRECT BUY"}
+                          </s-badge>
+                        </s-stack>
+                        <s-stack direction="block" gap="extra-tight">
+                          <s-text type="strong">Description Summary:</s-text>
+                          <s-paragraph color="subdued">{extractedProduct.short_description}</s-paragraph>
+                        </s-stack>
+
+                        <s-divider></s-divider>
+                        
+                        <s-text type="strong">Normalized Specifications ({extractedProduct.specifications?.length || 0}):</s-text>
+                        {extractedProduct.specifications && extractedProduct.specifications.length > 0 ? (
+                          <div style={{ maxHeight: "250px", overflowY: "auto", border: "1px solid #eee", borderRadius: "4px", padding: "8px" }}>
+                            {extractedProduct.specifications.map((spec: any, idx: number) => (
+                              <div key={idx} style={{ padding: "6px 0", borderBottom: idx < extractedProduct.specifications.length - 1 ? "1px solid #f9f9f9" : "none" }}>
+                                <s-stack direction="inline" gap="base" align-items="center" style={{ justifyContent: "space-between" }}>
+                                  <s-text type="strong" variant="bodySm">{spec.name}:</s-text>
+                                  <s-text variant="bodySm">{spec.rawValue}</s-text>
+                                </s-stack>
+                                {spec.value !== null && spec.value !== undefined && spec.value !== spec.rawValue && (
+                                  <div style={{ marginTop: "4px", paddingLeft: "10px" }}>
+                                    <s-badge tone="success" size="base">
+                                      Parsed: {typeof spec.value === 'object' ? JSON.stringify(spec.value) : spec.value} {spec.unit || ""} ({spec.system || "dimension"})
+                                    </s-badge>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <s-paragraph color="subdued">No specifications extracted.</s-paragraph>
+                        )}
+                      </s-stack>
+                    </s-box>
+                  )}
+
+                  {!isExtracting && !extractedProduct && (
+                    <s-box padding="base" background="subdued" borderRadius="base" style={{ marginTop: "8px" }}>
+                      <s-paragraph color="subdued">No extraction data available. Edit the Markdown or re-run parser.</s-paragraph>
+                    </s-box>
+                  )}
 
                   <s-box padding="base" background="subdued" borderRadius="base" style={{ marginTop: "15px" }}>
                     <s-paragraph>
-                      Verify and edit the Markdown to ensure key specs are properly highlighted. 
-                      Once verified, approve this schema layout.
+                      Verify and edit the Markdown content on the left to add specs, then click "Re-run Extraction" to re-process.
                     </s-paragraph>
                     <s-stack direction="inline" gap="base" style={{ marginTop: "10px" }}>
                       <s-button 
                         variant="primary" 
+                        onClick={() => runExtraction(editingMarkdown, selectedSource.domain)}
+                        disabled={isExtracting}
+                      >
+                        Re-run Extraction
+                      </s-button>
+                      <s-button 
                         onClick={() => shopify.toast.show("Schema Lock: Confirmed format for domain!")}
                       >
                         Approve Schema & Lock
