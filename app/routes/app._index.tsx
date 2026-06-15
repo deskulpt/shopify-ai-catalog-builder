@@ -167,6 +167,10 @@ export default function Index() {
   const { storeName, pythonServiceStatus } = useLoaderData<typeof loader>();
   const shopify = useAppBridge();
 
+  const [isSessionLoaded, setIsSessionLoaded] = useState(false);
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [throttleDelay, setThrottleDelay] = useState(3000);
+
   const [queuedSources, setQueuedSources] = useState<QueuedSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState("");
@@ -457,10 +461,6 @@ export default function Index() {
     });
 
     shopify.toast.show(`Queued ${newSources.length} products successfully!`);
-
-    newSources.forEach((source) => {
-      triggerUrlIngestion(source);
-    });
   };
 
   // Grouping & Extraction States
@@ -833,6 +833,58 @@ export default function Index() {
       setIsPublishing(false);
     }
   };
+
+  // --- Session Persistence & Queue Processing ---
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("ingest_ai_session");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.queuedSources) setQueuedSources(parsed.queuedSources);
+        if (parsed.crawlResult) setCrawlResult(parsed.crawlResult);
+        if (parsed.customCollections) setCustomCollections(parsed.customCollections);
+        if (parsed.selectedSourceId) setSelectedSourceId(parsed.selectedSourceId);
+      }
+    } catch (e) {
+      console.error("Failed to load session", e);
+    }
+    setIsSessionLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (isSessionLoaded) {
+      const session = { queuedSources, crawlResult, customCollections, selectedSourceId };
+      localStorage.setItem("ingest_ai_session", JSON.stringify(session));
+    }
+  }, [queuedSources, crawlResult, customCollections, selectedSourceId, isSessionLoaded]);
+
+  useEffect(() => {
+    if (!isProcessingQueue) return;
+
+    const nextSource = queuedSources.find(s => s.status === "queued");
+    if (!nextSource) {
+      if (queuedSources.some(s => s.status === "converting")) {
+        return; // Wait for current to finish
+      }
+      setIsProcessingQueue(false);
+      shopify.toast.show("Queue processing complete!");
+      return;
+    }
+
+    const currentlyConverting = queuedSources.filter(s => s.status === "converting").length;
+    if (currentlyConverting > 0) return;
+
+    let isMounted = true;
+    const processNext = async () => {
+      await new Promise(r => setTimeout(r, throttleDelay));
+      if (!isMounted) return;
+      triggerUrlIngestion(nextSource);
+    };
+
+    processNext();
+    return () => { isMounted = false; };
+  }, [queuedSources, isProcessingQueue, throttleDelay]);
+  // ----------------------------------------------
 
   const handleScrapeFirstOnly = () => {
     if (extractedProduct?.is_multi && extractedProduct.products?.length > 0) {
@@ -1606,6 +1658,39 @@ export default function Index() {
       {/* Ingestion Queue List */}
       {queuedSources.length > 0 && (
         <s-section heading="🗂 Queued Ingestion Sources">
+          <s-stack direction="inline" gap="base" align-items="center" style={{ marginBottom: "15px", flexWrap: "wrap" }}>
+            <s-button 
+              variant={isProcessingQueue ? "destructive" : "primary"}
+              onClick={() => setIsProcessingQueue(!isProcessingQueue)}
+              disabled={!queuedSources.some(s => s.status === "queued") && !isProcessingQueue}
+            >
+              {isProcessingQueue ? "Pause Processing" : "Start Processing Queue"}
+            </s-button>
+            <s-button onClick={() => {
+              if (confirm("Clear all queued sources and session data?")) {
+                setQueuedSources([]);
+                setCrawlResult(null);
+                setCustomCollections([]);
+                setSelectedSourceId(null);
+                setIsProcessingQueue(false);
+                localStorage.removeItem("ingest_ai_session");
+              }
+            }}>
+              Clear Session
+            </s-button>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
+              <s-text>Delay (ms):</s-text>
+              <input 
+                type="number" 
+                value={throttleDelay} 
+                onChange={(e) => setThrottleDelay(Number(e.target.value))}
+                min="500" 
+                step="500"
+                style={{ width: "80px", padding: "4px", borderRadius: "4px", border: "1px solid #ccc" }}
+              />
+            </div>
+          </s-stack>
+
           <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "10px" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid #eee", textAlign: "left" }}>
