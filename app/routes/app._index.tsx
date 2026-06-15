@@ -876,7 +876,10 @@ export default function Index() {
 
     let isMounted = true;
     const processNext = async () => {
-      await new Promise(r => setTimeout(r, throttleDelay));
+      // Randomize the delay to avoid forming a predictable pattern
+      // Wait between throttleDelay and (throttleDelay * 1.8) milliseconds
+      const randomDelay = throttleDelay + Math.floor(Math.random() * (throttleDelay * 0.8));
+      await new Promise(r => setTimeout(r, randomDelay));
       if (!isMounted) return;
       triggerUrlIngestion(nextSource);
     };
