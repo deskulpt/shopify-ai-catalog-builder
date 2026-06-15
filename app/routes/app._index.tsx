@@ -1267,6 +1267,7 @@ export default function Index() {
 
                 {crawlResult.categories.map((category: any) => {
                   const isCatExpanded = !!expandedCategories[category.name];
+                  const catProducts = category.products || [];
                   
                   let catUrlsForCat: string[] = [];
                   if (groupSimilar && groupedCategories[category.name]) {
