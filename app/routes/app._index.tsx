@@ -9,6 +9,119 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
+/**
+ * Convert a markdown/plain-text product description to structured HTML
+ * suitable for Shopify's descriptionHtml field.
+ *
+ * Handles: headings (h2/h3/h4), paragraphs, unordered/ordered bullet lists,
+ * bold (**text**), italic (*text*), inline code, horizontal rules, and
+ * image/link markdown (images stripped, links converted to <a>).
+ */
+function markdownToDescriptionHtml(md: string): string {
+  if (!md || !md.trim()) return "";
+
+  const lines = md.split("\n");
+  const html: string[] = [];
+  let inUl = false;
+  let inOl = false;
+  let para: string[] = [];
+
+  const flushPara = () => {
+    if (para.length > 0) {
+      const text = para.join(" ").trim();
+      if (text) html.push(`<p>${text}</p>`);
+      para = [];
+    }
+  };
+  const closeLists = () => {
+    if (inUl) { html.push("</ul>"); inUl = false; }
+    if (inOl) { html.push("</ol>"); inOl = false; }
+  };
+
+  const inlineFormat = (text: string): string => {
+    // Strip markdown images entirely
+    text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, "");
+    // Convert links to <a>
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    // Bold and italic
+    text = text.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+    text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/\*(.+?)\*/g, "<em>$1</em>");
+    text = text.replace(/__(.+?)__/g, "<strong>$1</strong>");
+    text = text.replace(/_(.+?)_/g, "<em>$1</em>");
+    // Inline code
+    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+    return text;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const stripped = line.trim();
+
+    // Horizontal rules → <hr>
+    if (/^---+$|^===+$|^\*\*\*+$/.test(stripped)) {
+      flushPara(); closeLists();
+      html.push("<hr>");
+      continue;
+    }
+
+    // Headings
+    const headingMatch = stripped.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushPara(); closeLists();
+      const level = Math.min(headingMatch[1].length + 1, 4); // map h1→h2, cap at h4
+      html.push(`<h${level}>${inlineFormat(headingMatch[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    // Ordered list items
+    const olMatch = stripped.match(/^(\d+)[.)\s]\s+(.+)$/);
+    if (olMatch) {
+      flushPara();
+      if (inUl) { html.push("</ul>"); inUl = false; }
+      if (!inOl) { html.push("<ol>"); inOl = true; }
+      html.push(`<li>${inlineFormat(olMatch[2])}</li>`);
+      continue;
+    }
+
+    // Unordered list items (-, *, •)
+    const ulMatch = stripped.match(/^[-*•]\s+(.+)$/);
+    if (ulMatch) {
+      flushPara();
+      if (inOl) { html.push("</ol>"); inOl = false; }
+      if (!inUl) { html.push("<ul>"); inUl = true; }
+      html.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
+      continue;
+    }
+
+    // Table rows → skip (handled separately as spec table in api.publish)
+    if (stripped.startsWith("|") && stripped.endsWith("|")) {
+      continue;
+    }
+    // Table separator rows
+    if (/^[|:\-\s]+$/.test(stripped) && stripped.includes("-")) {
+      continue;
+    }
+
+    // Blank line → end paragraph
+    if (!stripped) {
+      flushPara(); closeLists();
+      continue;
+    }
+
+    // Everything else → paragraph content
+    closeLists();
+    const formatted = inlineFormat(stripped);
+    if (formatted.trim()) para.push(formatted);
+  }
+
+  flushPara();
+  closeLists();
+
+  return html.join("\n");
+}
+
 interface QueuedSource {
   id: string;
   name: string;
@@ -17,7 +130,9 @@ interface QueuedSource {
   markdown: string;
   error?: string;
   domain?: string;
+  extractedData?: any;
 }
+
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -68,13 +183,18 @@ export default function Index() {
     if (selectedSource?.markdown) {
       setEditingMarkdown(selectedSource.markdown);
       
-      // Simple multi-product heuristic: multiple tables or occurrences of SKU / Model
-      const skuMatches = (selectedSource.markdown.match(/sku/gi) || []).length;
-      const modelMatches = (selectedSource.markdown.match(/model/gi) || []).length;
-      setIsMultiProduct(skuMatches > 2 || modelMatches > 2);
+      if (selectedSource.extractedData) {
+        setExtractedProduct(selectedSource.extractedData);
+        setIsMultiProduct(false);
+      } else {
+        // Simple multi-product heuristic: multiple tables or occurrences of SKU / Model
+        const skuMatches = (selectedSource.markdown.match(/sku/gi) || []).length;
+        const modelMatches = (selectedSource.markdown.match(/model/gi) || []).length;
+        setIsMultiProduct(skuMatches > 2 || modelMatches > 2);
 
-      // Trigger field extraction automatically
-      runExtraction(selectedSource.markdown, selectedSource.domain);
+        // Trigger field extraction automatically
+        runExtraction(selectedSource.markdown, selectedSource.domain);
+      }
     } else {
       setEditingMarkdown("");
       setIsMultiProduct(false);
@@ -237,7 +357,19 @@ export default function Index() {
   };
 
   const handleCategorySelectToggle = (category: any, checked: boolean) => {
-    const catUrls = (category.products || []).map((p: any) => p.url);
+    let catUrls: string[] = [];
+    if (groupSimilar && groupedCategories[category.name]) {
+      groupedCategories[category.name].forEach((group: any) => {
+        if (group.is_grouped) {
+          group.variants.forEach((v: any) => catUrls.push(v.url));
+        } else {
+          catUrls.push(group.variants[0].url);
+        }
+      });
+    } else {
+      catUrls = (category.products || []).map((p: any) => p.url);
+    }
+    
     if (checked) {
       setSelectedProducts(prev => {
         const next = [...prev];
@@ -336,9 +468,424 @@ export default function Index() {
   const [isGrouping, setIsGrouping] = useState(false);
   const [groupedCategories, setGroupedCategories] = useState<Record<string, any[]>>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [shopifyCollections, setShopifyCollections] = useState<{id: string; title: string; handle: string; productsCount: number}[]>([]);
+  const [customCollections, setCustomCollections] = useState<{id: string; title: string}[]>([]);
+  const [groupingStats, setGroupingStats] = useState<{total: number; matched: number; newCount: number} | null>(null);
+  // groupCollectionOverride[groupTitle] = collectionId ("" = create new, undefined = use auto-match)
+  const [groupCollectionOverride, setGroupCollectionOverride] = useState<Record<string, string>>({});
 
   const [extractedProduct, setExtractedProduct] = useState<any | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+
+  // Review modal editing states
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [reviewTitle, setReviewTitle] = useState("");
+  const [reviewDescription, setReviewDescription] = useState("");
+  const [reviewSku, setReviewSku] = useState("");
+  const [reviewPrice, setReviewPrice] = useState("0.00");
+  const [reviewPurchaseType, setReviewPurchaseType] = useState<"direct_buy" | "quote_only">("direct_buy");
+  const [reviewSpecs, setReviewSpecs] = useState<{ name: string; value: string; selected: boolean }[]>([]);
+  const [reviewOptions, setReviewOptions] = useState<{ name: string; values: string[] }[]>([]);
+  const [reviewOptionsText, setReviewOptionsText] = useState<string[]>([]);
+  const [reviewVariants, setReviewVariants] = useState<{
+    id: string;
+    optionValues: { optionName: string; name: string }[];
+    sku: string;
+    price: string;
+    selected: boolean;
+  }[]>([]);
+  const [reviewMediaLinks, setReviewMediaLinks] = useState<{ url: string; alt: string; selected: boolean }[]>([]);
+  const [reviewFileLinks, setReviewFileLinks] = useState<{ url: string; text: string; selected: boolean; embed?: boolean }[]>([]);
+  const [reviewCurrency, setReviewCurrency] = useState("USD");
+  const [reviewPriceUnit, setReviewPriceUnit] = useState("");
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  const isHtmlViewerLink = (urlStr: string) => {
+    if (!urlStr) return false;
+    const urlLower = urlStr.toLowerCase();
+    if (urlLower.includes("directindustry.com/pdf/") || urlLower.includes("pdf.directindustry.com")) {
+      return true;
+    }
+    if ((urlLower.includes("/pdf/") || urlLower.includes("/catalog/") || urlLower.includes("/viewer/") || urlLower.includes("/brochure/")) &&
+        (urlLower.includes(".html") || urlLower.includes(".php") || !urlLower.endsWith(".pdf"))) {
+      return true;
+    }
+    return false;
+  };
+
+  // Parse variants list from markdown tables (Model/SKU/Price columns + option columns)
+  const parseVariantsFromMarkdown = (markdown: string, baseSku: string) => {
+    const lines = markdown.split("\n");
+    const tables: string[][] = [];
+    let currentTable: string[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("|")) {
+        currentTable.push(trimmed);
+      } else if (currentTable.length > 0) {
+        if (currentTable.length >= 3) {
+          tables.push(currentTable);
+        }
+        currentTable = [];
+      }
+    }
+    if (currentTable.length >= 3) {
+      tables.push(currentTable);
+    }
+    
+    for (const tableLines of tables) {
+      const headers = tableLines[0]
+        .split("|")
+        .map(s => s.trim())
+        .filter((_, i, arr) => i > 0 && i < arr.length - 1);
+        
+      const hasSkuOrModel = headers.some(h => 
+        /sku|model|part\s*number|p\/n|type/i.test(h)
+      );
+      const potentialOptions = headers.filter(h => 
+        h && h.trim() !== "" && !/sku|model|part\s*number|p\/n|price|cost|description|spec|value|image|img|photo|logo/i.test(h)
+      );
+      
+      if (hasSkuOrModel && potentialOptions.length > 0) {
+        const optionDefs = potentialOptions.map(name => ({
+          name,
+          values: new Set<string>()
+        }));
+        
+        const parsedVariants: any[] = [];
+        
+        for (let i = 2; i < tableLines.length; i++) {
+          const cells = tableLines[i]
+            .split("|")
+            .map(s => s.trim())
+            .filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+            
+          if (cells.length === headers.length) {
+            const rowData: Record<string, string> = {};
+            headers.forEach((h, idx) => {
+              rowData[h] = cells[idx];
+            });
+            
+            const skuHeader = headers.find(h => h && h.trim() !== "" && /sku|part\s*number|p\/n/i.test(h));
+            const modelHeader = headers.find(h => h && h.trim() !== "" && /model|type/i.test(h));
+            const priceHeader = headers.find(h => h && h.trim() !== "" && /price|cost/i.test(h));
+            
+            const variantSku = (skuHeader ? rowData[skuHeader] : "") || (modelHeader ? rowData[modelHeader] : "") || "";
+            const variantPrice = priceHeader ? rowData[priceHeader] : "0.00";
+            
+            const optValues = potentialOptions.map(name => {
+              const val = rowData[name] || "Standard";
+              const optDef = optionDefs.find(o => o.name === name);
+              if (optDef) optDef.values.add(val);
+              return { optionName: name, name: val };
+            });
+            
+            parsedVariants.push({
+              id: Math.random().toString(36).substring(7),
+              optionValues: optValues,
+              sku: variantSku || `${baseSku}-${optValues.map(v => v.name.replace(/\s+/g, "-")).join("-")}`,
+              price: variantPrice.replace(/[^0-9.]/g, "") || "0.00",
+              selected: true
+            });
+          }
+        }
+        
+        if (parsedVariants.length > 0) {
+          return {
+            options: optionDefs.map(o => ({ name: o.name, values: Array.from(o.values) })),
+            variants: parsedVariants
+          };
+        }
+      }
+    }
+    return null;
+  };
+
+  const generateCombinations = (
+    optList: { name: string; values: string[] }[],
+    index = 0,
+    current: { optionName: string; name: string }[] = []
+  ): { optionValues: { optionName: string; name: string }[] }[] => {
+    if (index === optList.length) {
+      return [{ optionValues: current }];
+    }
+    const currentOpt = optList[index];
+    const results: any[] = [];
+    for (const val of currentOpt.values) {
+      results.push(
+        ...generateCombinations(optList, index + 1, [
+          ...current,
+          { optionName: currentOpt.name, name: val },
+        ])
+      );
+    }
+    return results;
+  };
+
+  const updateVariantsFromOptions = (
+    newOptions: { name: string; values: string[] }[],
+    baseSkuVal = reviewSku,
+    basePriceVal = reviewPrice
+  ) => {
+    if (newOptions.length === 0) {
+      setReviewVariants([]);
+      return;
+    }
+    
+    const combs = generateCombinations(newOptions);
+    setReviewVariants(prev => {
+      return combs.map(comb => {
+        const existing = prev.find(rv => 
+          rv.optionValues.every(ov => 
+            comb.optionValues.some(cov => cov.optionName === ov.optionName && cov.name === ov.name)
+          )
+        );
+        
+        if (existing) {
+          return existing;
+        }
+        
+        const skuSuffix = comb.optionValues.map(ov => ov.name.replace(/\s+/g, "-")).join("-");
+        return {
+          id: Math.random().toString(36).substring(7),
+          optionValues: comb.optionValues,
+          sku: baseSkuVal ? `${baseSkuVal}-${skuSuffix}` : skuSuffix,
+          price: basePriceVal || "0.00",
+          selected: true,
+        };
+      });
+    });
+  };
+
+  const handleOpenReviewModal = () => {
+    if (!extractedProduct) return;
+    
+    setReviewTitle(extractedProduct.title || "");
+    setReviewDescription(extractedProduct.short_description || "");
+    setReviewSku(extractedProduct.sku || "");
+    setReviewPrice(extractedProduct.price || "0.00");
+    setReviewCurrency(extractedProduct.currency || "USD");
+    setReviewPriceUnit(extractedProduct.price_unit || "");
+    setReviewPurchaseType(extractedProduct.purchase_type || "direct_buy");
+    
+    const specs = (extractedProduct.specifications || []).map((s: any) => ({
+      name: s.name,
+      value: s.displayValue || (s.value !== null && s.value !== undefined ? (s.unit ? `${s.value} ${s.unit}` : String(s.value)) : String(s.rawValue)),
+      selected: true,
+    }));
+    setReviewSpecs(specs);
+
+    const media = (extractedProduct.media_links || []).map((m: any) => ({
+      url: m.url,
+      alt: m.alt || "",
+      selected: true,
+    }));
+    setReviewMediaLinks(media);
+
+    const files = (extractedProduct.file_links || []).map((f: any) => ({
+      url: f.url,
+      text: f.text || "",
+      selected: true,
+      embed: isHtmlViewerLink(f.url),
+    }));
+    setReviewFileLinks(files);
+    
+    const parsed = parseVariantsFromMarkdown(editingMarkdown, extractedProduct.sku || "");
+    if (parsed) {
+      setReviewOptions(parsed.options);
+      setReviewOptionsText(parsed.options.map(o => o.values.join(", ")));
+      setReviewVariants(parsed.variants);
+    } else {
+      setReviewOptions([]);
+      setReviewOptionsText([]);
+      setReviewVariants([]);
+    }
+    
+    setIsReviewOpen(true);
+  };
+
+  const handleBaseSkuChange = (newSku: string) => {
+    setReviewSku(newSku);
+    setReviewVariants(prev => prev.map(v => {
+      const skuSuffix = v.optionValues.map(ov => ov.name.replace(/\s+/g, "-")).join("-");
+      const expectedPrevSku = reviewSku ? `${reviewSku}-${skuSuffix}` : skuSuffix;
+      if (v.sku === expectedPrevSku || !v.sku) {
+        return { ...v, sku: newSku ? `${newSku}-${skuSuffix}` : skuSuffix };
+      }
+      return v;
+    }));
+  };
+
+  const handleEnableVariants = () => {
+    const initialOpts = [{ name: "Model", values: ["Standard"] }];
+    setReviewOptions(initialOpts);
+    setReviewOptionsText(["Standard"]);
+    updateVariantsFromOptions(initialOpts);
+  };
+
+  const handleAddOption = () => {
+    const nextOpts = [...reviewOptions, { name: `Option ${reviewOptions.length + 1}`, values: ["Standard"] }];
+    setReviewOptions(nextOpts);
+    setReviewOptionsText([...reviewOptionsText, "Standard"]);
+    updateVariantsFromOptions(nextOpts);
+  };
+
+  const handleUpdateOptionName = (idx: number, newName: string) => {
+    const oldName = reviewOptions[idx].name;
+    const nextOpts = reviewOptions.map((o, i) => i === idx ? { ...o, name: newName } : o);
+    setReviewOptions(nextOpts);
+    setReviewVariants(prev => prev.map(v => ({
+      ...v,
+      optionValues: v.optionValues.map(ov => ov.optionName === oldName ? { ...ov, optionName: newName } : ov)
+    })));
+  };
+
+  const handleOptionValuesChange = (idx: number, text: string) => {
+    const nextText = [...reviewOptionsText];
+    nextText[idx] = text;
+    setReviewOptionsText(nextText);
+    
+    const vals = text.split(",").map(v => v.trim()).filter(Boolean);
+    const nextOpts = reviewOptions.map((o, i) => i === idx ? { ...o, values: vals } : o);
+    setReviewOptions(nextOpts);
+    updateVariantsFromOptions(nextOpts, reviewSku, reviewPrice);
+  };
+
+  const handleRemoveOption = (idx: number) => {
+    const nextOpts = reviewOptions.filter((_, i) => i !== idx);
+    const nextText = reviewOptionsText.filter((_, i) => i !== idx);
+    setReviewOptions(nextOpts);
+    setReviewOptionsText(nextText);
+    updateVariantsFromOptions(nextOpts);
+  };
+
+  const handleAddSpec = () => {
+    setReviewSpecs(prev => [...prev, { name: "New Spec", value: "", selected: true }]);
+  };
+
+  const handleUpdateSpec = (idx: number, field: "name" | "value", val: string) => {
+    setReviewSpecs(prev => prev.map((s, i) => i === idx ? { ...s, [field]: val } : s));
+  };
+
+  const handleToggleSpec = (idx: number, checked: boolean) => {
+    setReviewSpecs(prev => prev.map((s, i) => i === idx ? { ...s, selected: checked } : s));
+  };
+
+  const handleRemoveSpec = (idx: number) => {
+    setReviewSpecs(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateVariantSku = (id: string, newSku: string) => {
+    setReviewVariants(prev => prev.map(v => v.id === id ? { ...v, sku: newSku } : v));
+  };
+
+  const handleUpdateVariantPrice = (id: string, newPrice: string) => {
+    setReviewVariants(prev => prev.map(v => v.id === id ? { ...v, price: newPrice } : v));
+  };
+
+  const handleToggleVariant = (id: string, checked: boolean) => {
+    setReviewVariants(prev => prev.map(v => v.id === id ? { ...v, selected: checked } : v));
+  };
+
+  const handlePublish = async () => {
+    setIsPublishing(true);
+    try {
+      const payload = {
+        title: reviewTitle,
+        descriptionHtml: markdownToDescriptionHtml(reviewDescription),
+        sku: reviewSku,
+        price: reviewPrice,
+        currency: reviewCurrency,
+        price_unit: reviewPriceUnit,
+        purchase_type: reviewPurchaseType,
+        specifications: reviewSpecs.filter(s => s.selected).map(s => ({ name: s.name, value: s.value })),
+        variants: reviewVariants.filter(v => v.selected),
+        options: reviewOptions,
+        media_links: reviewMediaLinks.filter(m => m.selected).map(m => ({ url: m.url, alt: m.alt })),
+        file_links: reviewFileLinks.filter(f => f.selected).map(f => ({ url: f.url, text: f.text, embed: f.embed })),
+      };
+      
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      
+      const data = await res.json();
+      if (data.success) {
+        shopify.toast.show("Product published successfully as DRAFT!");
+        setIsReviewOpen(false);
+        if (selectedSourceId) {
+          setQueuedSources(prev => 
+            prev.map(s => s.id === selectedSourceId 
+              ? { ...s, status: "ready" as const, name: `✓ ${s.name.replace(/^✓ /, "")}` } 
+              : s
+            )
+          );
+        }
+      } else {
+        shopify.toast.show(`Publishing failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      shopify.toast.show(`Error: ${err.message}`);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleScrapeFirstOnly = () => {
+    if (extractedProduct?.is_multi && extractedProduct.products?.length > 0) {
+      const firstProduct = extractedProduct.products[0];
+      setExtractedProduct({
+        ...firstProduct,
+        is_multi: false,
+        success: true
+      });
+      setIsMultiProduct(false);
+      if (firstProduct.section_markdown) {
+        setEditingMarkdown(firstProduct.section_markdown);
+      }
+      shopify.toast.show("Focused on 1st product only");
+    }
+  };
+
+  const handleSplitMultiProducts = () => {
+    if (!selectedSource || !extractedProduct?.is_multi || !extractedProduct.products) {
+      return;
+    }
+
+    const newSources: QueuedSource[] = extractedProduct.products.map((prod: any) => {
+      return {
+        id: Math.random().toString(36).substring(7),
+        name: prod.title || "Split Product",
+        type: selectedSource.type,
+        status: "ready",
+        markdown: prod.section_markdown || "",
+        domain: selectedSource.domain,
+        extractedData: {
+          ...prod,
+          is_multi: false,
+          success: true
+        }
+      };
+    });
+
+    if (newSources.length === 0) return;
+
+    // Replace the selected parent source in the queue with the new ones
+    setQueuedSources(prev => {
+      const idx = prev.findIndex(s => s.id === selectedSource.id);
+      if (idx === -1) return prev;
+      const updated = [...prev];
+      updated.splice(idx, 1, ...newSources);
+      return updated;
+    });
+
+    // Select the first new source
+    setSelectedSourceId(newSources[0].id);
+    shopify.toast.show(`Split into ${newSources.length} individual products`);
+  };
 
   const handleGroupToggle = async (checked: boolean) => {
     setGroupSimilar(checked);
@@ -346,36 +893,65 @@ export default function Index() {
 
     setIsGrouping(true);
     const newGroupedCats: Record<string, any[]> = {};
+    let totalStats = { total: 0, matched: 0, new: 0 };
 
     try {
+      // Step 1: Fetch existing Shopify collections once
+      let collections: {id: string; title: string}[] = shopifyCollections;
+      if (collections.length === 0) {
+        try {
+          const colRes = await fetch("/api/collections");
+          const colData = await colRes.json();
+          if (colData.success && colData.collections) {
+            setShopifyCollections(colData.collections);
+            collections = colData.collections;
+          }
+        } catch (_) {
+          // Proceed without collections
+        }
+      }
+
+      // Step 2: Group each category, passing the collections for matching
       for (const category of crawlResult.categories) {
         const catProducts = category.products || [];
         if (catProducts.length <= 1) {
           newGroupedCats[category.name] = catProducts.map((p: any) => ({
             title: p.name,
             is_grouped: false,
-            variants: [p]
+            variants: [p],
+            collection_match: null,
           }));
+          totalStats.total += catProducts.length;
+          totalStats.new += catProducts.length;
           continue;
         }
 
         const res = await fetch("/api/group-variants", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ products: catProducts }),
+          body: JSON.stringify({ products: catProducts, collections }),
         });
         const data = await res.json();
         if (data.success) {
           newGroupedCats[category.name] = data.grouped;
+          if (data.stats) {
+            totalStats.total += data.stats.total;
+            totalStats.matched += data.stats.matched;
+            totalStats.new += data.stats.new;
+          }
         } else {
           newGroupedCats[category.name] = catProducts.map((p: any) => ({
             title: p.name,
             is_grouped: false,
-            variants: [p]
+            variants: [p],
+            collection_match: null,
           }));
+          totalStats.total += catProducts.length;
+          totalStats.new += catProducts.length;
         }
       }
       setGroupedCategories(newGroupedCats);
+      setGroupingStats({ total: totalStats.total, matched: totalStats.matched, newCount: totalStats.new });
     } catch (err) {
       shopify.toast.show("Error grouping variants");
     } finally {
@@ -412,11 +988,23 @@ export default function Index() {
       const res = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown: mdContent, domain: domainStr }),
+        body: JSON.stringify({
+          markdown: mdContent,
+          domain: domainStr,
+          url: selectedSource?.type === "url" ? selectedSource.name : undefined
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        setExtractedProduct(data);
+        if (data.is_multi && data.products?.length > 0) {
+          setExtractedProduct({
+            ...data.products[0],
+            ...data
+          });
+          setIsMultiProduct(true);
+        } else {
+          setExtractedProduct(data);
+        }
       } else {
         shopify.toast.show(`Extraction failed: ${data.error || "Unknown error"}`);
       }
@@ -426,6 +1014,11 @@ export default function Index() {
       setIsExtracting(false);
     }
   };
+
+  const allCollections = [
+    ...shopifyCollections,
+    ...customCollections.map(c => ({ id: c.id, title: c.title, handle: "", productsCount: 0 }))
+  ];
 
   return (
     <s-page heading="Product Ingest AI">
@@ -634,14 +1227,62 @@ export default function Index() {
                 </s-stack>
               </s-box>
 
+              {/* Collection Grouping Stats Bar */}
+              {groupSimilar && groupingStats && (
+                <s-box
+                  padding="small"
+                  background="base"
+                  borderRadius="base"
+                  style={{
+                    marginBottom: "12px",
+                    border: "1px solid #e1e3e5",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "16px",
+                    flexWrap: "wrap"
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: "13px" }}>Collection Analysis:</span>
+                  <span style={{
+                    background: "#f0fdf4", color: "#166534",
+                    padding: "2px 10px", borderRadius: "12px",
+                    fontSize: "12px", fontWeight: 600, border: "1px solid #bbf7d0"
+                  }}>
+                    ✓ {groupingStats.matched} matched to existing
+                  </span>
+                  <span style={{
+                    background: "#fff7ed", color: "#9a3412",
+                    padding: "2px 10px", borderRadius: "12px",
+                    fontSize: "12px", fontWeight: 600, border: "1px solid #fed7aa"
+                  }}>
+                    + {groupingStats.newCount} new collections
+                  </span>
+                  <span style={{ color: "#6d7175", fontSize: "12px" }}>
+                    {groupingStats.total} total groups · {shopifyCollections.length} Shopify collections loaded
+                  </span>
+                </s-box>
+              )}
+
               <div style={{ paddingLeft: "10px" }}>
+
                 {crawlResult.categories.map((category: any) => {
                   const isCatExpanded = !!expandedCategories[category.name];
-                  const catProducts = category.products || [];
-                  const selectedInCat = selectedProducts.filter(url => 
-                    catProducts.some((p: any) => p.url === url)
-                  );
-                  const isAllSelected = catProducts.length > 0 && selectedInCat.length === catProducts.length;
+                  
+                  let catUrlsForCat: string[] = [];
+                  if (groupSimilar && groupedCategories[category.name]) {
+                    groupedCategories[category.name].forEach((group: any) => {
+                      if (group.is_grouped) {
+                        group.variants.forEach((v: any) => catUrlsForCat.push(v.url));
+                      } else {
+                        catUrlsForCat.push(group.variants[0].url);
+                      }
+                    });
+                  } else {
+                    catUrlsForCat = (category.products || []).map((p: any) => p.url);
+                  }
+
+                  const selectedInCat = selectedProducts.filter(url => catUrlsForCat.includes(url));
+                  const isAllSelected = catUrlsForCat.length > 0 && selectedInCat.length === catUrlsForCat.length;
                   const isSomeSelected = selectedInCat.length > 0 && !isAllSelected;
 
                   return (
@@ -678,8 +1319,8 @@ export default function Index() {
                                 const isSomeGroupSelected = selectedInGroup.length > 0 && !isAllGroupSelected;
 
                                 return (
-                                  <div key={group.title} style={{ margin: "10px 0", paddingLeft: "15px", borderLeft: "2px solid #ccc" }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                  <div key={group.title} style={{ margin: "10px 0", paddingLeft: "15px", borderLeft: `2px solid ${group.collection_match ? "#008060" : "#ffa500"}` }}>
+                                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
                                       <s-button
                                         variant="tertiary"
                                         icon={isGroupExpanded ? "chevron-up" : "chevron-down"}
@@ -692,15 +1333,115 @@ export default function Index() {
                                           if (el) el.indeterminate = isSomeGroupSelected;
                                         }}
                                         onChange={(e) => handleGroupSelectToggle(group, e.target.checked)}
-                                        style={{ cursor: "pointer", width: "14px", height: "14px" }}
+                                        style={{ cursor: "pointer", width: "14px", height: "14px", marginTop: "4px" }}
                                       />
-                                      <s-stack direction="inline" gap="tight" align-items="center">
-                                        <s-text type="strong">{group.title}</s-text>
-                                        <s-badge tone="info">{group.variants.length} Variants</s-badge>
-                                        {group.options && group.options.map((opt: string) => (
-                                          <s-chip key={opt} size="base">{opt}</s-chip>
-                                        ))}
-                                      </s-stack>
+                                      <div style={{ flex: 1 }}>
+                                        <s-stack direction="inline" gap="tight" align-items="center" style={{ flexWrap: "wrap" }}>
+                                          <s-text type="strong">{group.title}</s-text>
+                                          <s-badge tone="info">{group.variants.length} Variants</s-badge>
+                                          {group.options && group.options.map((opt: string) => (
+                                            <s-chip key={opt} size="base">{opt}</s-chip>
+                                          ))}
+                                        </s-stack>
+
+                                        {/* Collection assignment row */}
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                                          {/* Auto-match badge */}
+                                          {group.collection_match && groupCollectionOverride[group.title] === undefined && (
+                                            <span style={{
+                                              background: "#f0fdf4", color: "#166534",
+                                              padding: "2px 8px", borderRadius: "10px",
+                                              fontSize: "11px", border: "1px solid #bbf7d0",
+                                              display: "inline-flex", alignItems: "center", gap: "4px"
+                                            }}>
+                                              📁 {group.collection_match.title}
+                                              <span style={{ opacity: 0.7 }}>
+                                                ({Math.round(group.collection_match.score * 100)}% match)
+                                              </span>
+                                            </span>
+                                          )}
+                                          {!group.collection_match && groupCollectionOverride[group.title] === undefined && (
+                                            <span style={{
+                                              background: "#fff7ed", color: "#9a3412",
+                                              padding: "2px 8px", borderRadius: "10px",
+                                              fontSize: "11px", border: "1px solid #fed7aa"
+                                            }}>
+                                              ✦ New Collection
+                                            </span>
+                                          )}
+                                          {groupCollectionOverride[group.title] !== undefined && (
+                                            <span style={{
+                                              background: groupCollectionOverride[group.title] ? "#f0fdf4" : "#fff7ed",
+                                              color: groupCollectionOverride[group.title] ? "#166534" : "#9a3412",
+                                              padding: "2px 8px", borderRadius: "10px",
+                                              fontSize: "11px",
+                                              border: `1px solid ${groupCollectionOverride[group.title] ? "#bbf7d0" : "#fed7aa"}`
+                                            }}>
+                                              {groupCollectionOverride[group.title]
+                                                ? `📁 ${allCollections.find(c => c.id === groupCollectionOverride[group.title])?.title ?? "Selected"}`
+                                                : "✦ New Collection"}
+                                            </span>
+                                          )}
+
+                                          {/* Override dropdown */}
+                                          <select
+                                            value={groupCollectionOverride[group.title] ?? (group.collection_match?.id ?? "")}
+                                            onChange={(e) => setGroupCollectionOverride(prev => ({
+                                              ...prev,
+                                              [group.title]: e.target.value
+                                            }))}
+                                            style={{
+                                              fontSize: "11px",
+                                              padding: "2px 6px",
+                                              borderRadius: "6px",
+                                              border: "1px solid #c9cccf",
+                                              background: "white",
+                                              cursor: "pointer",
+                                              maxWidth: "200px"
+                                            }}
+                                          >
+                                            <option value="">＋ Create new collection</option>
+                                            {allCollections.map((col) => (
+                                              <option key={col.id} value={col.id}>
+                                                {col.title} {col.productsCount !== undefined && col.productsCount > 0 ? `(${col.productsCount})` : ""}
+                                              </option>
+                                            ))}
+                                          </select>
+
+                                          {/* New Collection Input */}
+                                          {groupCollectionOverride[group.title] === "" && (
+                                            <input
+                                              type="text"
+                                              placeholder="Collection name..."
+                                              autoFocus
+                                              onBlur={(e) => {
+                                                const val = e.target.value.trim();
+                                                if (val) {
+                                                  const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                  setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                  setGroupCollectionOverride(prev => ({ ...prev, [group.title]: newId }));
+                                                }
+                                              }}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                  e.preventDefault();
+                                                  const val = e.currentTarget.value.trim();
+                                                  if (val) {
+                                                    const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                    setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                    setGroupCollectionOverride(prev => ({ ...prev, [group.title]: newId }));
+                                                  }
+                                                }
+                                              }}
+                                              style={{
+                                                fontSize: "11px", padding: "2px 6px",
+                                                borderRadius: "6px", border: "1px solid #008060",
+                                                maxWidth: "150px"
+                                              }}
+                                            />
+                                          )}
+                                        </div>
+                                      </div>
                                     </div>
 
                                     {isGroupExpanded && (
@@ -718,7 +1459,7 @@ export default function Index() {
                                               <s-stack direction="block">
                                                 <s-text>{variant.name}</s-text>
                                                 <s-text variant="bodySm" color="subdued">
-                                                  {variant.url} {variant.option_values && `| Option: ${JSON.stringify(variant.option_values)}`}
+                                                  {variant.url} {variant.option_values && `| ${JSON.stringify(variant.option_values)}`}
                                                 </s-text>
                                               </s-stack>
                                             </div>
@@ -731,18 +1472,90 @@ export default function Index() {
                               } else {
                                 const standalone = group.variants[0];
                                 const isChecked = selectedProducts.includes(standalone.url);
+                                const collMatch = group.collection_match;
+                                const overrideId = groupCollectionOverride[standalone.name];
                                 return (
-                                  <div key={standalone.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0", paddingLeft: "15px" }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={isChecked}
-                                      onChange={() => handleProductSelectToggle(standalone.url)}
-                                      style={{ cursor: "pointer" }}
-                                    />
-                                    <s-stack direction="block">
-                                      <s-text>{standalone.name}</s-text>
-                                      <s-text variant="bodySm" color="subdued">{standalone.url}</s-text>
-                                    </s-stack>
+                                  <div key={standalone.url} style={{ margin: "6px 0", paddingLeft: "15px" }}>
+                                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => handleProductSelectToggle(standalone.url)}
+                                        style={{ cursor: "pointer", marginTop: "3px" }}
+                                      />
+                                      <div style={{ flex: 1 }}>
+                                        <s-stack direction="block">
+                                          <s-text>{standalone.name}</s-text>
+                                          <s-text variant="bodySm" color="subdued">{standalone.url}</s-text>
+                                        </s-stack>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
+                                          {collMatch && overrideId === undefined && (
+                                            <span style={{
+                                              background: "#f0fdf4", color: "#166534",
+                                              padding: "1px 7px", borderRadius: "10px",
+                                              fontSize: "10px", border: "1px solid #bbf7d0"
+                                            }}>📁 {collMatch.title} ({Math.round(collMatch.score * 100)}%)</span>
+                                          )}
+                                          {!collMatch && overrideId === undefined && (
+                                            <span style={{
+                                              background: "#fff7ed", color: "#9a3412",
+                                              padding: "1px 7px", borderRadius: "10px",
+                                              fontSize: "10px", border: "1px solid #fed7aa"
+                                            }}>✦ New</span>
+                                          )}
+                                          <select
+                                            value={overrideId ?? (collMatch?.id ?? "")}
+                                            onChange={(e) => setGroupCollectionOverride(prev => ({
+                                              ...prev,
+                                              [standalone.name]: e.target.value
+                                            }))}
+                                            style={{
+                                              fontSize: "10px", padding: "1px 5px",
+                                              borderRadius: "5px", border: "1px solid #c9cccf",
+                                              background: "white", cursor: "pointer", maxWidth: "180px"
+                                            }}
+                                          >
+                                            <option value="">＋ New collection</option>
+                                            {allCollections.map((col) => (
+                                              <option key={col.id} value={col.id}>{col.title}</option>
+                                            ))}
+                                          </select>
+                                          
+                                          {/* New Collection Input */}
+                                          {overrideId === "" && (
+                                            <input
+                                              type="text"
+                                              placeholder="Collection name..."
+                                              autoFocus
+                                              onBlur={(e) => {
+                                                const val = e.target.value.trim();
+                                                if (val) {
+                                                  const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                  setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                  setGroupCollectionOverride(prev => ({ ...prev, [standalone.name]: newId }));
+                                                }
+                                              }}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                  e.preventDefault();
+                                                  const val = e.currentTarget.value.trim();
+                                                  if (val) {
+                                                    const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                    setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                    setGroupCollectionOverride(prev => ({ ...prev, [standalone.name]: newId }));
+                                                  }
+                                                }
+                                              }}
+                                              style={{
+                                                fontSize: "10px", padding: "1px 5px",
+                                                borderRadius: "5px", border: "1px solid #008060",
+                                                maxWidth: "120px"
+                                              }}
+                                            />
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
                                   </div>
                                 );
                               }
@@ -870,10 +1683,10 @@ export default function Index() {
                     You can edit the parsed Markdown on the left to focus on other sections or proceed to parse all.
                   </s-paragraph>
                   <s-stack direction="inline" gap="base" style={{ marginTop: "8px" }}>
-                    <s-button onClick={() => shopify.toast.show("Scraping 1st product only")}>
+                    <s-button onClick={handleScrapeFirstOnly}>
                       Scrape 1st Product
                     </s-button>
-                    <s-button onClick={() => shopify.toast.show("Scraping full document")}>
+                    <s-button onClick={handleSplitMultiProducts}>
                       Identify More / Scrape All
                     </s-button>
                   </s-stack>
@@ -985,6 +1798,14 @@ export default function Index() {
                         Re-run Extraction
                       </s-button>
                       <s-button 
+                        variant="primary"
+                        onClick={handleOpenReviewModal}
+                        disabled={!extractedProduct}
+                        style={{ background: "linear-gradient(135deg, #008060 0%, #005e46 100%)", color: "white" }}
+                      >
+                        Review & Publish
+                      </s-button>
+                      <s-button 
                         onClick={() => shopify.toast.show("Schema Lock: Confirmed format for domain!")}
                       >
                         Approve Schema & Lock
@@ -1019,6 +1840,666 @@ export default function Index() {
           <s-text>Port 5005 (MarkItDown + Flask)</s-text>
         </s-paragraph>
       </s-section>
+
+      {/* Review & Publish Drawer/Modal Overlay */}
+      {isReviewOpen && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.4)",
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          zIndex: 9999,
+          animation: "fadeIn 0.2s ease-out",
+        }}>
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes scaleIn {
+              from { transform: scale(0.96); opacity: 0; }
+              to { transform: scale(1); opacity: 1; }
+            }
+            .review-input {
+              width: 100%;
+              padding: 10px 12px;
+              border: 1px solid #c9cccf;
+              border-radius: 6px;
+              font-size: 14px;
+              font-family: inherit;
+              box-sizing: border-box;
+              transition: border-color 0.15s ease-in-out;
+            }
+            .review-input:focus {
+              border-color: #008060;
+              outline: none;
+              box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.2);
+            }
+            .review-textarea {
+              width: 100%;
+              height: 100px;
+              padding: 10px 12px;
+              border: 1px solid #c9cccf;
+              border-radius: 6px;
+              font-size: 14px;
+              font-family: inherit;
+              box-sizing: border-box;
+              resize: vertical;
+            }
+            .review-textarea:focus {
+              border-color: #008060;
+              outline: none;
+              box-shadow: 0 0 0 2px rgba(0, 128, 96, 0.2);
+            }
+            .review-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 8px;
+            }
+            .review-table th {
+              background-color: #f6f6f7;
+              padding: 10px;
+              font-size: 13px;
+              font-weight: 600;
+              text-align: left;
+              border-bottom: 1px solid #e1e3e5;
+            }
+            .review-table td {
+              padding: 8px 10px;
+              font-size: 13px;
+              border-bottom: 1px solid #e1e3e5;
+              vertical-align: middle;
+            }
+          `}</style>
+          
+          <div style={{
+            backgroundColor: "#ffffff",
+            borderRadius: "16px",
+            width: "90%",
+            maxWidth: "850px",
+            maxHeight: "90vh",
+            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
+            border: "1px solid rgba(225, 227, 229, 0.8)",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            animation: "scaleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "16px 24px",
+              borderBottom: "1px solid #e1e3e5",
+              background: "#fafbfb",
+            }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 600, color: "#1a1c1d" }}>
+                  Review &amp; Publish Product
+                </h2>
+                <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: "#6d7175" }}>
+                  Configure product details and variant rules before publishing to Shopify.
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsReviewOpen(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  fontSize: "24px",
+                  cursor: "pointer",
+                  color: "#6d7175",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{
+              padding: "24px",
+              overflowY: "auto",
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              gap: "24px",
+            }}>
+              
+              {/* Part 1: Basic Info */}
+              <div>
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                  Product details
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                      Product Title
+                    </label>
+                    <input 
+                      type="text" 
+                      className="review-input" 
+                      value={reviewTitle} 
+                      onChange={(e) => setReviewTitle(e.target.value)} 
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                      Description Summary
+                    </label>
+                    <textarea 
+                      className="review-textarea" 
+                      value={reviewDescription} 
+                      onChange={(e) => setReviewDescription(e.target.value)} 
+                    />
+                  </div>
+                  {reviewOptions.length === 0 && (
+                    <div style={{ display: "flex", gap: "16px" }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                          SKU
+                        </label>
+                        <input 
+                          type="text" 
+                          className="review-input" 
+                          value={reviewSku} 
+                          onChange={(e) => handleBaseSkuChange(e.target.value)} 
+                        />
+                      </div>
+                      {reviewPurchaseType !== "quote_only" && (
+                        <div style={{ flex: 1 }}>
+                          <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                            Price
+                          </label>
+                          <input 
+                            type="text" 
+                            className="review-input" 
+                            value={reviewPrice} 
+                            onChange={(e) => setReviewPrice(e.target.value)} 
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Currency & Selling Unit Row (Shown for all products) */}
+                  <div style={{ display: "flex", gap: "16px" }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                        Currency
+                      </label>
+                      <select 
+                        className="review-input"
+                        value={reviewCurrency}
+                        onChange={(e) => setReviewCurrency(e.target.value)}
+                      >
+                        <option value="USD">USD ($)</option>
+                        <option value="CAD">CAD (C$)</option>
+                        <option value="INR">INR (₹)</option>
+                        <option value="GBP">GBP (£)</option>
+                        <option value="EUR">EUR (€)</option>
+                      </select>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px", color: "#303030" }}>
+                        Selling Unit / Qty Attribute
+                      </label>
+                      <input 
+                        type="text" 
+                        className="review-input" 
+                        placeholder="e.g. Piece, Meter, Kg, roll"
+                        value={reviewPriceUnit} 
+                        onChange={(e) => setReviewPriceUnit(e.target.value)} 
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Part 2: Purchase Type selector */}
+              <div>
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                  Purchase Type
+                </h3>
+                <div style={{ display: "flex", borderRadius: "8px", overflow: "hidden", border: "1px solid #c9cccf", width: "fit-content" }}>
+                  <button
+                    onClick={() => setReviewPurchaseType("direct_buy")}
+                    style={{
+                      padding: "10px 20px",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      backgroundColor: reviewPurchaseType === "direct_buy" ? "#008060" : "#ffffff",
+                      color: reviewPurchaseType === "direct_buy" ? "#ffffff" : "#6d7175",
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    Direct Buy (Standard Checkout)
+                  </button>
+                  <button
+                    onClick={() => setReviewPurchaseType("quote_only")}
+                    style={{
+                      padding: "10px 20px",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      backgroundColor: reviewPurchaseType === "quote_only" ? "#e0b034" : "#ffffff",
+                      color: reviewPurchaseType === "quote_only" ? "#ffffff" : "#6d7175",
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    Request Quote Only (RFQ)
+                  </button>
+                </div>
+                <p style={{ margin: "8px 0 0 0", fontSize: "12px", color: "#6d7175", fontStyle: "italic" }}>
+                  {reviewPurchaseType === "quote_only" 
+                    ? "✓ Quote-only mode sets base price to $0.00/null, disables checkout, and flags metafield." 
+                    : "✓ Direct buy enables standard price checkout and cart options."
+                  }
+                </p>
+              </div>
+
+              {/* Part 3: Specifications list */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                    Specifications
+                  </h3>
+                  <button
+                    onClick={handleAddSpec}
+                    style={{
+                      border: "1px dashed #008060",
+                      background: "transparent",
+                      color: "#008060",
+                      padding: "4px 10px",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: 500,
+                    }}
+                  >
+                    + Add Specification
+                  </button>
+                </div>
+                {reviewSpecs.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: "13px", color: "#6d7175" }}>No specifications added.</p>
+                ) : (
+                  <div style={{ border: "1px solid #e1e3e5", borderRadius: "8px", overflow: "hidden" }}>
+                    <table className="review-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: "80px", textAlign: "center" }}>Include?</th>
+                          <th>Spec Name</th>
+                          <th>Value</th>
+                          <th style={{ width: "60px", textAlign: "center" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reviewSpecs.map((spec, idx) => (
+                          <tr key={idx} style={{ opacity: spec.selected ? 1 : 0.6 }}>
+                            <td style={{ textAlign: "center" }}>
+                              <input 
+                                type="checkbox" 
+                                checked={spec.selected} 
+                                onChange={(e) => handleToggleSpec(idx, e.target.checked)} 
+                                style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                              />
+                            </td>
+                            <td>
+                              <input 
+                                type="text" 
+                                className="review-input" 
+                                value={spec.name} 
+                                onChange={(e) => handleUpdateSpec(idx, "name", e.target.value)} 
+                              />
+                            </td>
+                            <td>
+                              <input 
+                                type="text" 
+                                className="review-input" 
+                                value={spec.value} 
+                                onChange={(e) => handleUpdateSpec(idx, "value", e.target.value)} 
+                              />
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <button
+                                onClick={() => handleRemoveSpec(idx)}
+                                style={{
+                                  border: "none",
+                                  background: "transparent",
+                                  color: "#bf0711",
+                                  cursor: "pointer",
+                                  fontSize: "18px",
+                                }}
+                              >
+                                &times;
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Part 3.5: Discovered Media & Files */}
+              {((reviewMediaLinks && reviewMediaLinks.length > 0) || (reviewFileLinks && reviewFileLinks.length > 0)) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "20px", borderTop: "1px solid #e1e3e5", paddingTop: "20px" }}>
+                  {reviewMediaLinks && reviewMediaLinks.length > 0 && (
+                    <div>
+                      <h3 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                        Discovered Images ({reviewMediaLinks.length})
+                      </h3>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "12px", border: "1px solid #e1e3e5", borderRadius: "8px", padding: "12px", maxHeight: "250px", overflowY: "auto" }}>
+                        {reviewMediaLinks.map((media, idx) => (
+                          <div 
+                            key={idx} 
+                            style={{ 
+                              position: "relative", 
+                              border: "1px solid #e1e3e5", 
+                              borderRadius: "6px", 
+                              padding: "4px", 
+                              display: "flex", 
+                              flexDirection: "column", 
+                              alignItems: "center", 
+                              backgroundColor: media.selected ? "#f0fdf4" : "#ffffff", 
+                              borderColor: media.selected ? "#008060" : "#e1e3e5",
+                              transition: "all 0.2s" 
+                            }}
+                          >
+                            <input 
+                              type="checkbox" 
+                              checked={media.selected} 
+                              onChange={(e) => setReviewMediaLinks(prev => prev.map((m, i) => i === idx ? { ...m, selected: e.target.checked } : m))}
+                              style={{ position: "absolute", top: "4px", left: "4px", cursor: "pointer", width: "16px", height: "16px", zIndex: 2 }}
+                            />
+                            <div style={{ width: "100%", height: "80px", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginBottom: "4px" }}>
+                              <img src={media.url} alt={media.alt || "Product image"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                            </div>
+                            <span style={{ fontSize: "10px", color: "#6d7175", textOverflow: "ellipsis", whiteSpace: "nowrap", overflow: "hidden", width: "100%", textAlign: "center" }}>
+                              {media.alt || `Image ${idx + 1}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {reviewFileLinks && reviewFileLinks.length > 0 && (
+                    <div>
+                      <h3 style={{ margin: "0 0 12px 0", fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                        Discovered Documents &amp; PDFs ({reviewFileLinks.length})
+                      </h3>
+                      <div style={{ border: "1px solid #e1e3e5", borderRadius: "8px", overflow: "hidden" }}>
+                        <table className="review-table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: "80px", textAlign: "center" }}>Attach?</th>
+                              <th>Link Text / Description</th>
+                              <th>URL</th>
+                              <th style={{ width: "120px", textAlign: "center" }}>Embed as Iframe?</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reviewFileLinks.map((file, idx) => (
+                              <tr key={idx} style={{ opacity: file.selected ? 1 : 0.6 }}>
+                                <td style={{ textAlign: "center" }}>
+                                  <input 
+                                    type="checkbox" 
+                                    checked={file.selected} 
+                                    onChange={(e) => setReviewFileLinks(prev => prev.map((f, i) => i === idx ? { ...f, selected: e.target.checked } : f))} 
+                                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                  />
+                                </td>
+                                <td>
+                                  <input 
+                                    type="text" 
+                                    className="review-input" 
+                                    value={file.text} 
+                                    onChange={(e) => setReviewFileLinks(prev => prev.map((f, i) => i === idx ? { ...f, text: e.target.value } : f))} 
+                                  />
+                                </td>
+                                <td>
+                                  <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ color: "#008060", fontSize: "12px", textDecoration: "underline", wordBreak: "break-all" }}>
+                                    {file.url}
+                                  </a>
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                  <input 
+                                    type="checkbox" 
+                                    checked={file.embed || false} 
+                                    disabled={!file.selected}
+                                    onChange={(e) => setReviewFileLinks(prev => prev.map((f, i) => i === idx ? { ...f, embed: e.target.checked } : f))} 
+                                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Part 4: Options & Variants list */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px", color: "#6d7175" }}>
+                    Variants &amp; Options
+                  </h3>
+                  {reviewOptions.length === 0 && (
+                    <button
+                      onClick={handleEnableVariants}
+                      style={{
+                        border: "1px solid #008060",
+                        background: "transparent",
+                        color: "#008060",
+                        padding: "4px 10px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      Enable Options &amp; Variants
+                    </button>
+                  )}
+                </div>
+
+                {reviewOptions.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {/* Option definitions */}
+                    <div style={{ background: "#f6f6f7", padding: "16px", borderRadius: "8px", border: "1px solid #e1e3e5" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                        <h4 style={{ margin: 0, fontSize: "13px", fontWeight: 600, color: "#303030" }}>Configure Options</h4>
+                        <button
+                          onClick={handleAddOption}
+                          style={{
+                            border: "none",
+                            background: "transparent",
+                            color: "#008060",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                          }}
+                        >
+                          + Add Option Type
+                        </button>
+                      </div>
+                      
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        {reviewOptions.map((opt, idx) => (
+                          <div key={idx} style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                            <div style={{ width: "30%" }}>
+                              <input
+                                type="text"
+                                className="review-input"
+                                placeholder="Option Name (e.g. Size)"
+                                value={opt.name}
+                                onChange={(e) => handleUpdateOptionName(idx, e.target.value)}
+                              />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <input
+                                type="text"
+                                className="review-input"
+                                placeholder="Values (comma separated, e.g. S, M, L)"
+                                value={reviewOptionsText[idx] || ""}
+                                onChange={(e) => handleOptionValuesChange(idx, e.target.value)}
+                              />
+                            </div>
+                            <button
+                              onClick={() => handleRemoveOption(idx)}
+                              style={{
+                                border: "none",
+                                background: "transparent",
+                                color: "#bf0711",
+                                cursor: "pointer",
+                                fontSize: "18px",
+                              }}
+                            >
+                              &times;
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Variants matrix */}
+                    <div>
+                      <h4 style={{ margin: "0 0 8px 0", fontSize: "13px", fontWeight: 600, color: "#303030" }}>Variants Matrix ({reviewVariants.length})</h4>
+                      <div style={{ border: "1px solid #e1e3e5", borderRadius: "8px", overflow: "hidden" }}>
+                        <table className="review-table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: "80px", textAlign: "center" }}>Active?</th>
+                              <th>Variant</th>
+                              <th>SKU</th>
+                              {reviewPurchaseType !== "quote_only" && <th>Price</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reviewVariants.map((v) => (
+                              <tr key={v.id} style={{ opacity: v.selected ? 1 : 0.6 }}>
+                                <td style={{ textAlign: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={v.selected}
+                                    onChange={(e) => handleToggleVariant(v.id, e.target.checked)}
+                                    style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                                  />
+                                </td>
+                                <td>
+                                  <span style={{ fontWeight: 500 }}>
+                                    {v.optionValues.map(ov => ov.name).join(" / ")}
+                                  </span>
+                                </td>
+                                <td>
+                                  <input
+                                    type="text"
+                                    className="review-input"
+                                    value={v.sku}
+                                    onChange={(e) => handleUpdateVariantSku(v.id, e.target.value)}
+                                  />
+                                </td>
+                                {reviewPurchaseType !== "quote_only" && (
+                                  <td>
+                                    <input
+                                      type="text"
+                                      className="review-input"
+                                      value={v.price}
+                                      onChange={(e) => handleUpdateVariantPrice(v.id, e.target.value)}
+                                    />
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {reviewOptions.length === 0 && (
+                  <p style={{ margin: 0, fontSize: "13px", color: "#6d7175", fontStyle: "italic" }}>
+                    Standard product with no variants.
+                  </p>
+                )}
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{
+              padding: "16px 24px",
+              borderTop: "1px solid #e1e3e5",
+              background: "#fafbfb",
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "12px",
+            }}>
+              <button
+                onClick={() => setIsReviewOpen(false)}
+                disabled={isPublishing}
+                style={{
+                  border: "1px solid #c9cccf",
+                  background: "#ffffff",
+                  color: "#1a1c1d",
+                  padding: "10px 18px",
+                  borderRadius: "6px",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePublish}
+                disabled={isPublishing}
+                style={{
+                  border: "none",
+                  background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                  color: "#ffffff",
+                  padding: "10px 18px",
+                  borderRadius: "6px",
+                  fontSize: "14px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+                }}
+              >
+                {isPublishing ? (
+                  <>
+                    <s-spinner size="small" accessibility-label="Publishing..."></s-spinner>
+                    Publishing...
+                  </>
+                ) : (
+                  "Publish to Shopify as Draft"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </s-page>
   );
 }
