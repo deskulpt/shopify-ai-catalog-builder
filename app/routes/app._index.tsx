@@ -138,6 +138,7 @@ interface QueuedSource {
     description: boolean;
     variants: boolean;
   };
+  size?: string;
 }
 
 
@@ -209,6 +210,9 @@ export default function Index() {
   const [urlInput, setUrlInput] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMultiProduct, setIsMultiProduct] = useState(false);
+  const [conversionProgress, setConversionProgress] = useState<Record<string, number>>({});
+  const [urlFavicon, setUrlFavicon] = useState<string | null>(null);
+  const [urlValidationError, setUrlValidationError] = useState<string | null>(null);
 
   // Editable markdown content
   const [editingMarkdown, setEditingMarkdown] = useState("");
@@ -240,15 +244,33 @@ export default function Index() {
   }, [selectedSourceId, selectedSource?.markdown]);
 
   const handleFileUpload = async (file: File) => {
+    const sizeStr = file.size > 1024 * 1024 
+      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
+      : `${(file.size / 1024).toFixed(0)} KB`;
+
+    const sourceId = Math.random().toString(36).substring(7);
     const newSource: QueuedSource = {
-      id: Math.random().toString(36).substring(7),
+      id: sourceId,
       name: file.name,
       type: "file",
       status: "converting",
       markdown: "",
+      size: sizeStr,
     };
     setQueuedSources(prev => [...prev, newSource]);
-    setActiveTab("queue");
+    
+    // Simulate upload & conversion progress bar
+    setConversionProgress(prev => ({ ...prev, [sourceId]: 10 }));
+    const progressInterval = setInterval(() => {
+      setConversionProgress(prev => {
+        const current = prev[sourceId] || 10;
+        if (current >= 90) {
+          clearInterval(progressInterval);
+          return prev;
+        }
+        return { ...prev, [sourceId]: current + Math.floor(Math.random() * 15) + 5 };
+      });
+    }, 400);
 
     try {
       const formData = new FormData();
@@ -260,25 +282,42 @@ export default function Index() {
       });
       const data = await res.json();
       
+      clearInterval(progressInterval);
+      setConversionProgress(prev => ({ ...prev, [sourceId]: 100 }));
+      
+      setTimeout(() => {
+        setConversionProgress(prev => {
+          const next = { ...prev };
+          delete next[sourceId];
+          return next;
+        });
+      }, 1000);
+
       if (data.success) {
         setQueuedSources(prev => 
-          prev.map(s => s.id === newSource.id 
+          prev.map(s => s.id === sourceId 
             ? { ...s, status: "ready", markdown: data.markdown } 
             : s
           )
         );
-        setSelectedSourceId(newSource.id);
+        setSelectedSourceId(sourceId);
       } else {
         setQueuedSources(prev => 
-          prev.map(s => s.id === newSource.id 
+          prev.map(s => s.id === sourceId 
             ? { ...s, status: "failed", error: data.error } 
             : s
           )
         );
       }
     } catch (err: any) {
+      clearInterval(progressInterval);
+      setConversionProgress(prev => {
+        const next = { ...prev };
+        delete next[sourceId];
+        return next;
+      });
       setQueuedSources(prev => 
-        prev.map(s => s.id === newSource.id 
+        prev.map(s => s.id === sourceId 
           ? { ...s, status: "failed", error: err.message } 
           : s
         )
@@ -286,9 +325,36 @@ export default function Index() {
     }
   };
 
+  const handleUrlInputChange = (val: string) => {
+    setUrlInput(val);
+    if (!val) {
+      setUrlFavicon(null);
+      setUrlValidationError(null);
+      return;
+    }
+    
+    try {
+      const url = new URL(val);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        setUrlFavicon(`https://www.google.com/s2/favicons?sz=64&domain=${url.hostname}`);
+        setUrlValidationError(null);
+      } else {
+        setUrlFavicon(null);
+        setUrlValidationError("URL must start with http:// or https://");
+      }
+    } catch (_) {
+      setUrlFavicon(null);
+      if (val.includes(".") && val.length > 8) {
+        setUrlValidationError("Please enter a valid URL (e.g., https://example.com/product)");
+      } else {
+        setUrlValidationError(null);
+      }
+    }
+  };
+
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!urlInput) return;
+    if (!urlInput || urlValidationError) return;
 
     const newSource: QueuedSource = {
       id: Math.random().toString(36).substring(7),
@@ -299,6 +365,8 @@ export default function Index() {
     };
     setQueuedSources(prev => [...prev, newSource]);
     setUrlInput("");
+    setUrlFavicon(null);
+    setUrlValidationError(null);
     setActiveTab("queue");
 
     try {
@@ -1965,22 +2033,43 @@ export default function Index() {
                 </p>
                 <form onSubmit={handleUrlSubmit}>
                   <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                    <input
-                      type="url"
-                      placeholder="https://vendor.com/products/valve-100"
-                      value={urlInput}
-                      onChange={(e) => setUrlInput(e.target.value)}
-                      style={{
-                        width: "100%",
-                        padding: "10px 14px",
-                        borderRadius: "6px",
-                        border: "1px solid #ccc",
-                        fontSize: "14px",
-                        boxSizing: "border-box",
-                      }}
-                      required
-                    />
-                    <s-button type="submit" variant="primary">
+                    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                      {urlFavicon && (
+                        <img 
+                          src={urlFavicon} 
+                          alt="favicon" 
+                          style={{
+                            position: "absolute",
+                            left: "12px",
+                            width: "20px",
+                            height: "20px",
+                            borderRadius: "4px",
+                            pointerEvents: "none"
+                          }}
+                        />
+                      )}
+                      <input
+                        type="url"
+                        placeholder="https://vendor.com/products/valve-100"
+                        value={urlInput}
+                        onChange={(e) => handleUrlInputChange(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "10px 14px",
+                          paddingLeft: urlFavicon ? "40px" : "14px",
+                          borderRadius: "6px",
+                          border: urlValidationError ? "1px solid #c5221f" : "1px solid #ccc",
+                          fontSize: "14px",
+                          boxSizing: "border-box",
+                          transition: "all 0.15s ease",
+                        }}
+                        required
+                      />
+                    </div>
+                    {urlValidationError && (
+                      <p style={{ color: "#c5221f", fontSize: "12px", margin: "0 0 4px 0" }}>⚠️ {urlValidationError}</p>
+                    )}
+                    <s-button type="submit" variant="primary" disabled={!!urlValidationError || !urlInput}>
                       Stage URL for Ingestion
                     </s-button>
                   </div>
@@ -2014,14 +2103,21 @@ export default function Index() {
                     }
                   }}
                   style={{
-                    border: isDragOver ? "2px dashed #008060" : "2px dashed #bbb",
-                    borderRadius: "8px",
-                    padding: "40px 20px",
+                    border: isDragOver ? "2px dashed #008060" : "2px dashed #c9cccf",
+                    borderRadius: "12px",
+                    padding: "48px 24px",
                     textAlign: "center",
-                    background: isDragOver ? "#f0f8f4" : "#fafafa",
+                    background: isDragOver 
+                      ? "rgba(240, 253, 244, 0.6)" 
+                      : "rgba(250, 250, 250, 0.4)",
+                    backdropFilter: "blur(12px)",
+                    WebkitBackdropFilter: "blur(12px)",
                     cursor: "pointer",
-                    transition: "all 0.2s ease-in-out",
+                    transition: "all 0.25s ease",
                     marginTop: "10px",
+                    boxShadow: isDragOver 
+                      ? "0 8px 24px rgba(0, 128, 96, 0.08), inset 0 0 12px rgba(0, 128, 96, 0.05)" 
+                      : "0 4px 12px rgba(0,0,0,0.02)",
                   }}
                   onClick={() => {
                     const input = document.createElement("input");
@@ -2034,14 +2130,78 @@ export default function Index() {
                     input.click();
                   }}
                 >
-                  <span style={{ fontSize: "28px" }}>📄</span>
-                  <p>
-                    <strong>Drag & drop file here</strong> or click to browse
+                  <div style={{
+                    width: "60px",
+                    height: "60px",
+                    borderRadius: "50%",
+                    background: isDragOver ? "#e6f4ea" : "#f1f2f4",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    margin: "0 auto 16px auto",
+                    transition: "transform 0.2s ease",
+                    transform: isDragOver ? "scale(1.1) rotate(5deg)" : "scale(1)",
+                  }}>
+                    <span style={{ fontSize: "28px", filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.1))" }}>
+                      {isDragOver ? "📥" : "📄"}
+                    </span>
+                  </div>
+                  <p style={{ margin: "0 0 6px 0", fontSize: "15px", color: "#202223" }}>
+                    <strong>Drag &amp; drop your catalog here</strong> or <span style={{ color: "#008060", textDecoration: "underline", fontWeight: 600 }}>browse files</span>
                   </p>
                   <span style={{ fontSize: "12px", color: "#6d7175" }}>
-                    Supports PDF, DOCX, HTML up to 10MB
+                    Supports PDF, DOCX, HTML, or TXT up to 10MB
                   </span>
                 </div>
+
+                {/* Active Uploads / Conversion Queue Progress Tracker */}
+                {queuedSources.some(s => s.status === "converting" || conversionProgress[s.id] !== undefined) && (
+                  <div style={{ marginTop: "24px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <h4 style={{ fontSize: "13px", fontWeight: 600, color: "#202223", margin: "0 0 4px 0" }}>Active Ingestion Queue:</h4>
+                    {queuedSources.filter(s => s.status === "converting" || conversionProgress[s.id] !== undefined).map(source => {
+                      const progress = conversionProgress[source.id] || 15;
+                      return (
+                        <div key={source.id} style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          background: "white",
+                          border: "1px solid #e1e3e5",
+                          borderRadius: "8px",
+                          padding: "12px",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
+                        }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <span style={{ fontSize: "18px" }}>⏳</span>
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                <span style={{ fontSize: "13px", fontWeight: 600, color: "#202223" }}>{source.name}</span>
+                                <span style={{ fontSize: "11px", color: "#6d7175" }}>{source.size || "Unknown size"} · Converting to Markdown...</span>
+                              </div>
+                            </div>
+                            <span style={{ fontSize: "12px", fontWeight: 600, color: "#008060" }}>{progress}%</span>
+                          </div>
+                          
+                          {/* Progress bar wrapper */}
+                          <div style={{
+                            width: "100%",
+                            height: "6px",
+                            background: "#f1f2f4",
+                            borderRadius: "3px",
+                            overflow: "hidden"
+                          }}>
+                            <div style={{
+                              width: `${progress}%`,
+                              height: "100%",
+                              background: "linear-gradient(90deg, #008060 0%, #34d399 100%)",
+                              borderRadius: "3px",
+                              transition: "width 0.3s ease-in-out"
+                            }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
