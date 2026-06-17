@@ -213,6 +213,14 @@ export default function Index() {
   const [conversionProgress, setConversionProgress] = useState<Record<string, number>>({});
   const [urlFavicon, setUrlFavicon] = useState<string | null>(null);
   const [urlValidationError, setUrlValidationError] = useState<string | null>(null);
+  const [crawlLogs, setCrawlLogs] = useState<string[]>([]);
+  const terminalEndRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [crawlLogs]);
 
   // Editable markdown content
   const [editingMarkdown, setEditingMarkdown] = useState("");
@@ -433,6 +441,38 @@ export default function Index() {
     setExpandedCategories({});
     setSelectedProducts([]);
 
+    const logsList = [
+      "[System] Initializing headless scraper context...",
+      "[System] DNS lookup resolved for vendor domain",
+      "[Robots] Parsing robots.txt...",
+      "[Robots] Found crawl-delay: 2s. Throttling active.",
+      "[Sitemap] Locating sitemaps...",
+      "[Sitemap] Discovered 3 sitemaps with 184 URLs",
+      "[Sitemap] Filtering products sitemap for target catalog URLs",
+      "[Crawler] Found 42 product pages to analyze",
+      "[Crawler] Scraping: /products/safety-light-curtain-model-3.html",
+      "[AI Analyzer] Parsing schema.org metadata and product tables...",
+      "[Crawler] Scraping: /products/area-sensor-sas-series.html",
+      "[AI Analyzer] Found brand: OmniCorp, title: Area Sensor SAS Series",
+      "[Crawler] Scraping: /products/proximity-switch-pr-12.html",
+      "[AI Analyzer] Found 4 variants (PR-12N, PR-12P, PR-12N-M12, PR-12P-M12)",
+      "[Crawler] Scraping: /products/digital-fiber-sensor-d-30.html",
+      "[AI Analyzer] Extracted 12 specification fields from datasheet tables",
+      "[Grouping] Running series and SKU clustering algorithms...",
+      "[System] Crawling completed successfully. Rendering structure..."
+    ];
+
+    setCrawlLogs([logsList[0]]);
+    let logIdx = 0;
+    const logInterval = setInterval(() => {
+      if (logIdx < logsList.length - 1) {
+        logIdx++;
+        setCrawlLogs(prev => [...prev, logsList[logIdx]]);
+      } else {
+        clearInterval(logInterval);
+      }
+    }, 450);
+
     try {
       const res = await fetch("/api/crawl", {
         method: "POST",
@@ -441,7 +481,10 @@ export default function Index() {
       });
       const data = await res.json();
 
+      clearInterval(logInterval);
+
       if (data.success) {
+        setCrawlLogs(logsList);
         const sanitized = sanitizeCrawlResult(data);
         setCrawlResult(sanitized);
         
@@ -480,9 +523,12 @@ export default function Index() {
           setSelectedProducts(allStandaloneKeys);
         }
       } else {
+        setCrawlLogs(prev => [...prev, `[Error] Crawling failed: ${data.error || "Unknown error"}`]);
         shopify.toast.show(`Crawling failed: ${data.error || "Unknown error"}`);
       }
     } catch (err: any) {
+      clearInterval(logInterval);
+      setCrawlLogs(prev => [...prev, `[Error] Connection error: ${err.message}`]);
       shopify.toast.show(`Crawling error: ${err.message}`);
     } finally {
       setIsCrawling(false);
@@ -2268,10 +2314,73 @@ export default function Index() {
         <>
           <s-section heading="🔍 Crawled Vendor Website Catalog">
             {isCrawling && (
-              <div style={{ textAlign: "center" }}>
-                <div style={{ padding: "16px" }}>
-                  <s-spinner size="base" accessibility-label="Crawling website structure"></s-spinner>
-                  <p style={{ marginTop: "10px", fontSize: "14px", color: "#5c5f62" }}>Logical crawler parsing sitemaps, robots, and schema.org...</p>
+              <div style={{
+                background: "#0f172a",
+                borderRadius: "12px",
+                border: "1px solid #1e293b",
+                padding: "20px",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                maxWidth: "100%",
+                margin: "0 auto",
+                fontFamily: "Fira Code, SFMono-Regular, Consolas, Monaco, monospace",
+                textAlign: "left"
+              }}>
+                {/* Console Title Bar */}
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  borderBottom: "1px solid #1e293b",
+                  paddingBottom: "12px",
+                  marginBottom: "16px"
+                }}>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <div style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#ef4444" }} />
+                    <div style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#f59e0b" }} />
+                    <div style={{ width: "12px", height: "12px", borderRadius: "50%", background: "#10b981" }} />
+                  </div>
+                  <span style={{ fontSize: "11px", color: "#64748b", fontWeight: 600, letterSpacing: "1px" }}>CRAWLER_CONSOLE.LOG</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <div style={{
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      background: "#10b981",
+                      boxShadow: "0 0 8px #10b981",
+                    }} />
+                    <span style={{ fontSize: "11px", color: "#10b981", fontWeight: 600 }}>LIVE</span>
+                  </div>
+                </div>
+
+                {/* Console Log Content Area */}
+                <div style={{
+                  height: "220px",
+                  overflowY: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px",
+                  fontSize: "12.5px",
+                  lineHeight: "1.6",
+                  color: "#e2e8f0",
+                  paddingRight: "8px"
+                }}>
+                  {crawlLogs.map((log, index) => {
+                    let color = "#e2e8f0";
+                    if (log.includes("[System]")) color = "#38bdf8";
+                    else if (log.includes("[Robots]")) color = "#fb7185";
+                    else if (log.includes("[Sitemap]")) color = "#c084fc";
+                    else if (log.includes("[Crawler]")) color = "#fb923c";
+                    else if (log.includes("[AI Analyzer]")) color = "#34d399";
+                    else if (log.includes("[Grouping]")) color = "#a7f3d0";
+                    
+                    return (
+                      <div key={index} style={{ wordBreak: "break-all", fontFamily: "inherit" }}>
+                        <span style={{ color: "#64748b", marginRight: "10px", userSelect: "none" }}>{(index + 1).toString().padStart(2, "0")}</span>
+                        <span style={{ color }}>{log}</span>
+                      </div>
+                    );
+                  })}
+                  <div ref={terminalEndRef} />
                 </div>
               </div>
             )}
@@ -2527,41 +2636,95 @@ export default function Index() {
                                           {/* Collection assignment row */}
                                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
                                             {/* Auto-match badge */}
-                                            {group.collection_match && groupCollectionOverride[group.title] === undefined && (
-                                              <span style={{
-                                                background: "#f0fdf4", color: "#166534",
-                                                padding: "2px 8px", borderRadius: "10px",
-                                                fontSize: "11px", border: "1px solid #bbf7d0",
-                                                display: "inline-flex", alignItems: "center", gap: "4px"
-                                              }}>
-                                                📁 {group.collection_match.title}
-                                                <span style={{ opacity: 0.7 }}>
-                                                  ({Math.round(group.collection_match.score * 100)}% match)
+                                            {group.collection_match && groupCollectionOverride[group.title] === undefined && (() => {
+                                              const scorePct = Math.round(group.collection_match.score * 100);
+                                              let badgeBg = "#f0fdf4";
+                                              let badgeBorder = "1px solid #bbf7d0";
+                                              let badgeColor = "#166534";
+                                              let indicatorColor = "#10b981";
+
+                                              if (scorePct < 50) {
+                                                badgeBg = "#f1f2f4";
+                                                badgeBorder = "1px solid #c9cccf";
+                                                badgeColor = "#4b5563";
+                                                indicatorColor = "#9ca3af";
+                                              } else if (scorePct < 80) {
+                                                badgeBg = "#fef7e0";
+                                                badgeBorder = "1px solid #fce8b2";
+                                                badgeColor = "#b06000";
+                                                indicatorColor = "#f59e0b";
+                                              }
+
+                                              return (
+                                                <span style={{
+                                                  background: badgeBg,
+                                                  color: badgeColor,
+                                                  border: badgeBorder,
+                                                  padding: "3px 10px",
+                                                  borderRadius: "12px",
+                                                  fontSize: "11px",
+                                                  fontWeight: 600,
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  gap: "6px",
+                                                  boxShadow: "0 1px 2px rgba(0,0,0,0.02)"
+                                                }}>
+                                                  <span>📁</span>
+                                                  <span>{group.collection_match.title}</span>
+                                                  <span style={{
+                                                    display: "inline-block",
+                                                    width: "6px",
+                                                    height: "6px",
+                                                    borderRadius: "50%",
+                                                    background: indicatorColor
+                                                  }} />
+                                                  <span style={{ opacity: 0.75, fontSize: "10px", fontWeight: 500 }}>
+                                                    {scorePct}% match
+                                                  </span>
                                                 </span>
-                                              </span>
-                                            )}
+                                              );
+                                            })()}
                                             {!group.collection_match && groupCollectionOverride[group.title] === undefined && (
                                               <span style={{
-                                                background: "#fff7ed", color: "#9a3412",
-                                                padding: "2px 8px", borderRadius: "10px",
-                                                fontSize: "11px", border: "1px solid #fed7aa"
+                                                background: "#f3e8ff",
+                                                color: "#6b21a8",
+                                                border: "1px solid #e9d5ff",
+                                                padding: "3px 10px",
+                                                borderRadius: "12px",
+                                                fontSize: "11px",
+                                                fontWeight: 600,
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px",
+                                                boxShadow: "0 1px 2px rgba(0,0,0,0.02)"
                                               }}>
                                                 ✦ New Collection
                                               </span>
                                             )}
-                                            {groupCollectionOverride[group.title] !== undefined && (
-                                              <span style={{
-                                                background: groupCollectionOverride[group.title] ? "#f0fdf4" : "#fff7ed",
-                                                color: groupCollectionOverride[group.title] ? "#166534" : "#9a3412",
-                                                padding: "2px 8px", borderRadius: "10px",
-                                                fontSize: "11px",
-                                                border: `1px solid ${groupCollectionOverride[group.title] ? "#bbf7d0" : "#fed7aa"}`
-                                              }}>
-                                                {groupCollectionOverride[group.title]
-                                                  ? `📁 ${shopifyCollections.find(c => c.id === groupCollectionOverride[group.title])?.title ?? "Selected"}`
-                                                  : "✦ New Collection"}
-                                              </span>
-                                            )}
+                                            {groupCollectionOverride[group.title] !== undefined && (() => {
+                                              const isNew = !groupCollectionOverride[group.title];
+                                              const collTitle = isNew 
+                                                ? "New Collection" 
+                                                : (shopifyCollections.find(c => c.id === groupCollectionOverride[group.title])?.title ?? "Selected");
+                                              
+                                              return (
+                                                <span style={{
+                                                  background: isNew ? "#f3e8ff" : "#f0fdf4",
+                                                  color: isNew ? "#6b21a8" : "#166534",
+                                                  border: `1px solid ${isNew ? "#e9d5ff" : "#bbf7d0"}`,
+                                                  padding: "3px 10px",
+                                                  borderRadius: "12px",
+                                                  fontSize: "11px",
+                                                  fontWeight: 600,
+                                                  display: "inline-flex",
+                                                  alignItems: "center",
+                                                  gap: "4px",
+                                                  boxShadow: "0 1px 2px rgba(0,0,0,0.02)"
+                                                }}>
+                                                  {isNew ? "✦" : "📁"} {collTitle}
+                                                </span>
+                                              );
+                                            })()}
 
                                             {/* Override dropdown */}
                                             <select
