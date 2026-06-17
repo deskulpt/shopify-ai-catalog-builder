@@ -215,6 +215,7 @@ export default function Index() {
   const [urlValidationError, setUrlValidationError] = useState<string | null>(null);
   const [crawlLogs, setCrawlLogs] = useState<string[]>([]);
   const terminalEndRef = React.useRef<HTMLDivElement>(null);
+  const [showSplitPreview, setShowSplitPreview] = useState(true);
 
   React.useEffect(() => {
     if (terminalEndRef.current) {
@@ -2996,7 +2997,86 @@ export default function Index() {
 
       {/* Stage 3: Publish Queue */}
       {activeTab === "queue" && (
-        <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "stretch", width: "100%" }}>
+        <div style={{ width: "100%" }}>
+          {/* Global Queue Progress Banner */}
+          {queuedSources.length > 0 && (() => {
+            const total = queuedSources.length;
+            const published = queuedSources.filter(s => s.name.startsWith("✓")).length;
+            const failed = queuedSources.filter(s => s.status === "failed").length;
+            const remaining = total - published - failed;
+            const pct = total > 0 ? Math.round((published / total) * 100) : 0;
+
+            return (
+              <div style={{
+                width: "100%",
+                background: "white",
+                border: "1px solid #e1e3e5",
+                borderRadius: "12px",
+                padding: "16px 20px",
+                marginBottom: "20px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.02)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+                boxSizing: "border-box"
+              }}>
+                <div style={{ display: "flex", justifySelf: "stretch", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div style={{
+                      width: "36px",
+                      height: "36px",
+                      borderRadius: "50%",
+                      background: "#e6f4ea",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "18px"
+                    }}>
+                      📈
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: "14px", fontWeight: 700, color: "#202223", margin: 0 }}>Queue Progress Overview</h3>
+                      <p style={{ fontSize: "12px", color: "#6d7175", margin: 0 }}>Monitor catalog extraction and Shopify publishing jobs</p>
+                    </div>
+                  </div>
+                  
+                  <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#137333" }}>
+                      ✓ {published} Published
+                    </span>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#c5221f" }}>
+                      ⚠️ {failed} Failed
+                    </span>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#6d7175" }}>
+                      ⏳ {remaining} Remaining
+                    </span>
+                    <span style={{ fontSize: "15px", fontWeight: 700, color: "#008060" }}>
+                      {pct}% Complete
+                    </span>
+                  </div>
+                </div>
+
+                {/* Progress track */}
+                <div style={{
+                  width: "100%",
+                  height: "8px",
+                  background: "#f1f2f4",
+                  borderRadius: "4px",
+                  overflow: "hidden"
+                }}>
+                  <div style={{
+                    width: `${pct}%`,
+                    height: "100%",
+                    background: "linear-gradient(90deg, #008060 0%, #34d399 100%)",
+                    borderRadius: "4px",
+                    transition: "width 0.4s ease"
+                  }} />
+                </div>
+              </div>
+            );
+          })()}
+
+          <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "stretch", width: "100%" }}>
           {/* Left Column: Queue Dashboard & Table */}
           <div style={{ flex: "1.2", minWidth: "450px" }}>
             <s-section heading="🗂 Queue & Auto-Publish dashboard">
@@ -3169,16 +3249,61 @@ export default function Index() {
                         </td>
                         <td style={{ padding: "8px", fontSize: "13px", color: "#202223" }}>{source.type.toUpperCase()}</td>
                         <td style={{ padding: "8px" }}>
-                          <span style={{
-                            fontSize: "13px",
-                            fontWeight: 600,
-                            color: source.status === "ready" ? "#137333" : 
-                                   source.status === "failed" ? "#c5221f" : 
-                                   source.status === "publishing" ? "#b06000" :
-                                   "#5c5f62"
-                          }}>
-                            {source.status.toUpperCase()}
-                          </span>
+                          {(() => {
+                            let bg = "#f1f2f4";
+                            let border = "1px solid #c9cccf";
+                            let color = "#202223";
+                            let text = source.status.toUpperCase();
+                            let icon = "⏳";
+                            let isPulsing = false;
+
+                            if (source.name.startsWith("✓")) {
+                              bg = "#e6f4ea";
+                              border = "1px solid #c4ebd0";
+                              color = "#137333";
+                              icon = "✓";
+                              text = "PUBLISHED";
+                            } else if (source.status === "ready") {
+                              bg = "#e6f4ea";
+                              border = "1px solid #c4ebd0";
+                              color = "#137333";
+                              icon = "✓";
+                              text = "READY";
+                            } else if (source.status === "failed") {
+                              bg = "#fbeae5";
+                              border = "1px solid #f9d2c4";
+                              color = "#c5221f";
+                              icon = "⚠️";
+                              text = "FAILED";
+                            } else if (source.status === "converting" || source.status === "publishing") {
+                              bg = "#fff7ed";
+                              border = "1px solid #fed7aa";
+                              color = "#9a3412";
+                              icon = "⚙️";
+                              isPulsing = true;
+                              text = source.status === "converting" ? "CONVERTING" : "PUBLISHING";
+                            }
+
+                            return (
+                              <span style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                background: bg,
+                                border: border,
+                                color: color,
+                                padding: "3px 8px",
+                                borderRadius: "6px",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                letterSpacing: "0.3px",
+                                opacity: isPulsing ? 0.85 : 1,
+                              }}>
+                                <span>{icon}</span>
+                                <span>{text}</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td style={{ padding: "8px" }}>
                           <div style={{ display: "flex", gap: "8px" }}>
@@ -3343,23 +3468,101 @@ export default function Index() {
                         {/* Sub-tab 1: Markdown Editor */}
                         {previewSubTab === "markdown" && (
                           <div>
-                            <textarea
-                              value={editingMarkdown}
-                              onChange={(e) => setEditingMarkdown(e.target.value)}
-                              style={{
-                                width: "100%",
-                                height: "350px",
-                                padding: "10px",
-                                fontFamily: "monospace",
-                                fontSize: "12px",
-                                borderRadius: "6px",
-                                border: "1px solid #ccc",
-                                boxSizing: "border-box",
-                                lineHeight: "1.4",
-                                resize: "vertical",
-                              }}
-                            />
-                            <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                            {/* Toggle header for preview options */}
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                              <span style={{ fontSize: "12px", color: "#6d7175" }}>Edit raw extracted product description markdown</span>
+                              <div style={{ display: "flex", background: "#f1f2f4", borderRadius: "6px", padding: "2px", border: "1px solid #e1e3e5" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowSplitPreview(false)}
+                                  style={{
+                                    padding: "4px 10px",
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    borderRadius: "4px",
+                                    border: "none",
+                                    background: !showSplitPreview ? "white" : "transparent",
+                                    color: !showSplitPreview ? "#202223" : "#6d7175",
+                                    cursor: "pointer",
+                                    boxShadow: !showSplitPreview ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                                    transition: "all 0.15s ease"
+                                  }}
+                                >
+                                  Editor Only
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowSplitPreview(true)}
+                                  style={{
+                                    padding: "4px 10px",
+                                    fontSize: "11px",
+                                    fontWeight: 600,
+                                    borderRadius: "4px",
+                                    border: "none",
+                                    background: showSplitPreview ? "white" : "transparent",
+                                    color: showSplitPreview ? "#202223" : "#6d7175",
+                                    cursor: "pointer",
+                                    boxShadow: showSplitPreview ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+                                    transition: "all 0.15s ease"
+                                  }}
+                                >
+                                  Split Preview
+                                </button>
+                              </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: "16px", flexDirection: showSplitPreview ? "row" : "column", alignItems: "stretch" }}>
+                              <div style={{ flex: 1, minWidth: "200px" }}>
+                                <textarea
+                                  value={editingMarkdown}
+                                  onChange={(e) => setEditingMarkdown(e.target.value)}
+                                  style={{
+                                    width: "100%",
+                                    height: "350px",
+                                    padding: "12px",
+                                    fontFamily: "monospace",
+                                    fontSize: "12px",
+                                    borderRadius: "6px",
+                                    border: "1px solid #ccc",
+                                    boxSizing: "border-box",
+                                    lineHeight: "1.5",
+                                    resize: "vertical",
+                                    background: "white"
+                                  }}
+                                />
+                              </div>
+                              {showSplitPreview && (
+                                <div style={{
+                                  flex: 1,
+                                  minWidth: "200px",
+                                  height: "350px",
+                                  overflowY: "auto",
+                                  padding: "16px",
+                                  background: "#fafbfb",
+                                  border: "1px solid #c9cccf",
+                                  borderRadius: "6px",
+                                  boxSizing: "border-box"
+                                }}>
+                                  <div style={{ 
+                                    fontSize: "10px", 
+                                    fontWeight: 700, 
+                                    color: "#008060", 
+                                    textTransform: "uppercase", 
+                                    letterSpacing: "0.5px", 
+                                    marginBottom: "10px", 
+                                    borderBottom: "1px solid #e1e3e5", 
+                                    paddingBottom: "4px" 
+                                  }}>
+                                    Shopify HTML Render Preview
+                                  </div>
+                                  <div 
+                                    dangerouslySetInnerHTML={{ __html: parseMarkdownToHtml(editingMarkdown) }}
+                                    style={{ fontSize: "13px", color: "#202223", lineHeight: "1.6" }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
                               <button 
                                 type="button"
                                 onClick={() => {
@@ -3516,6 +3719,7 @@ export default function Index() {
               </div>
             </s-section>
           </div>
+        </div>
         </div>
       )}
 
@@ -4229,3 +4433,65 @@ export default function Index() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+// Helper to convert basic Markdown to shopify-compatible HTML in real-time
+function parseMarkdownToHtml(md: string): string {
+  if (!md) return "";
+  let html = md;
+
+  // Escape HTML entities to avoid broken preview rendering
+  html = html
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Restore block formatting wrappers (so we don't escape our own tags)
+  // Convert code blocks
+  html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+    return `<pre style="background: #f1f2f4; padding: 10px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px; margin: 8px 0;"><code>${code}</code></pre>`;
+  });
+
+  // Convert headers
+  html = html.replace(/^### (.*$)/gim, '<h3 style="font-size: 14px; font-weight: 700; margin-top: 12px; margin-bottom: 6px; color: #202223;">$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2 style="font-size: 16px; font-weight: 700; margin-top: 16px; margin-bottom: 8px; color: #202223;">$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1 style="font-size: 18px; font-weight: 700; margin-top: 20px; margin-bottom: 10px; color: #202223;">$1</h1>');
+
+  // Convert bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+  // Convert italics
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+  // Convert lists
+  const lines = html.split('\n');
+  let inList = false;
+  const processedLines = lines.map(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      const listContent = trimmed.substring(2);
+      let out = "";
+      if (!inList) {
+        inList = true;
+        out += '<ul style="margin: 6px 0; padding-left: 20px; list-style-type: disc;">';
+      }
+      out += `<li style="margin: 4px 0; line-height: 1.4;">${listContent}</li>`;
+      return out;
+    } else {
+      let out = "";
+      if (inList) {
+        inList = false;
+        out += '</ul>';
+      }
+      if (trimmed.length > 0 && !trimmed.startsWith('&lt;h') && !trimmed.startsWith('&lt;pre') && !trimmed.startsWith('&lt;ul') && !trimmed.startsWith('&lt;li') && !trimmed.startsWith('<pre') && !trimmed.startsWith('<h') && !trimmed.startsWith('<ul') && !trimmed.startsWith('<li')) {
+        return `${out}<p style="margin: 8px 0; line-height: 1.5; color: #202223;">${trimmed}</p>`;
+      }
+      return out + line;
+    }
+  });
+
+  if (inList) {
+    processedLines.push('</ul>');
+  }
+
+  return processedLines.join('\n');
+}
