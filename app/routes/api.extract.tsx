@@ -12,6 +12,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const data = await request.json().catch(() => ({}));
     const markdown = data.markdown;
     const domain = data.domain;
+    const url = data.url;
 
     if (!markdown) {
       return Response.json({ error: "No Markdown provided" }, { status: 400 });
@@ -21,7 +22,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const response = await fetch("http://localhost:5005/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markdown, domain }),
+      body: JSON.stringify({ markdown, domain, url }),
     });
 
     if (!response.ok) {

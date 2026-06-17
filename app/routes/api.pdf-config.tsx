@@ -1,5 +1,5 @@
-import { json } from "react-router";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+const json = (data: unknown, init?: ResponseInit) => Response.json(data, init);
 
 /**
  * /api/pdf-config

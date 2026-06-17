@@ -126,11 +126,18 @@ interface QueuedSource {
   id: string;
   name: string;
   type: "file" | "url";
-  status: "queued" | "converting" | "ready" | "failed";
+  status: "queued" | "converting" | "ready" | "failed" | "publishing";
   markdown: string;
   error?: string;
   domain?: string;
   extractedData?: any;
+  existingProductId?: string;
+  collections?: string[];
+  overwriteOptions?: {
+    title: boolean;
+    description: boolean;
+    variants: boolean;
+  };
 }
 
 
@@ -161,6 +168,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   return null;
+};
+
+const getButtonStyle = (type: 'primary' | 'secondary' | 'destructive' | 'tertiary') => {
+  const base: React.CSSProperties = {
+    padding: "8px 16px",
+    borderRadius: "6px",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    border: "none",
+    transition: "all 0.15s ease",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+  };
+  if (type === 'primary') {
+    return { ...base, background: "#008060", color: "white" };
+  }
+  if (type === 'destructive') {
+    return { ...base, background: "#d72c0d", color: "white" };
+  }
+  if (type === 'secondary') {
+    return { ...base, border: "1px solid #c9cccf", background: "white", color: "#1a1c1d" };
+  }
+  return { ...base, background: "transparent", color: "#008060", padding: "6px 12px" };
 };
 
 export default function Index() {
@@ -215,6 +248,7 @@ export default function Index() {
       markdown: "",
     };
     setQueuedSources(prev => [...prev, newSource]);
+    setActiveTab("queue");
 
     try {
       const formData = new FormData();
@@ -265,6 +299,7 @@ export default function Index() {
     };
     setQueuedSources(prev => [...prev, newSource]);
     setUrlInput("");
+    setActiveTab("queue");
 
     try {
       const res = await fetch("/api/url-ingest", {
@@ -313,6 +348,13 @@ export default function Index() {
   const [crawlResult, setCrawlResult] = useState<any | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<"ingest" | "crawl" | "queue">("ingest");
+  const [previewSubTab, setPreviewSubTab] = useState<"markdown" | "schema">("schema");
+  
+  const [existingProductsMap, setExistingProductsMap] = useState<Record<string, { id: string; title: string; updatedAt: string }>>({});
+  const [globalOverwriteTitle, setGlobalOverwriteTitle] = useState(true);
+  const [globalOverwriteDescription, setGlobalOverwriteDescription] = useState(true);
+  const [globalOverwriteVariants, setGlobalOverwriteVariants] = useState(true);
 
   const handleCrawlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -332,17 +374,43 @@ export default function Index() {
       const data = await res.json();
 
       if (data.success) {
-        setCrawlResult(data);
+        const sanitized = sanitizeCrawlResult(data);
+        setCrawlResult(sanitized);
+        
         const defaultExpanded: Record<string, boolean> = {};
-        data.categories.forEach((cat: any) => {
+        sanitized.categories.forEach((cat: any) => {
           defaultExpanded[cat.name] = true;
         });
         setExpandedCategories(defaultExpanded);
+        setActiveTab("crawl");
 
-        const allUrls = data.categories.flatMap((cat: any) =>
-          (cat.products || []).map((p: any) => p.url)
-        );
-        setSelectedProducts(allUrls);
+        try {
+          const domain = new URL(crawlUrlInput).hostname;
+          const checkRes = await fetch("/api/check-existing", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ domain }),
+          });
+          const checkData = await checkRes.json();
+          if (checkData.success && checkData.existingProducts) {
+            setExistingProductsMap(checkData.existingProducts);
+          }
+        } catch (e) {
+          console.error("Failed to check existing products", e);
+        }
+
+        // Run grouping immediately if groupSimilar is true, otherwise initialize with standalone path keys
+        if (groupSimilar) {
+          await performGroupingForData(sanitized, shopifyCollections);
+        } else {
+          const allStandaloneKeys: string[] = [];
+          sanitized.categories.forEach((cat: any) => {
+            (cat.products || []).forEach((p: any, prodIdx: number) => {
+              allStandaloneKeys.push(`${cat.name}::standalone::${prodIdx}`);
+            });
+          });
+          setSelectedProducts(allStandaloneKeys);
+        }
       } else {
         shopify.toast.show(`Crawling failed: ${data.error || "Unknown error"}`);
       }
@@ -361,37 +429,37 @@ export default function Index() {
   };
 
   const handleCategorySelectToggle = (category: any, checked: boolean) => {
-    let catUrls: string[] = [];
+    let catKeys: string[] = [];
     if (groupSimilar && groupedCategories[category.name]) {
-      groupedCategories[category.name].forEach((group: any) => {
-        if (group.is_grouped) {
-          group.variants.forEach((v: any) => catUrls.push(v.url));
-        } else {
-          catUrls.push(group.variants[0].url);
-        }
+      groupedCategories[category.name].forEach((group: any, groupIdx: number) => {
+        group.variants.forEach((v: any, variantIdx: number) => {
+          catKeys.push(`${category.name}::grouped::${groupIdx}::${variantIdx}`);
+        });
       });
     } else {
-      catUrls = (category.products || []).map((p: any) => p.url);
+      (category.products || []).forEach((p: any, prodIdx: number) => {
+        catKeys.push(`${category.name}::standalone::${prodIdx}`);
+      });
     }
     
     if (checked) {
       setSelectedProducts(prev => {
         const next = [...prev];
-        catUrls.forEach((url: string) => {
-          if (!next.includes(url)) next.push(url);
+        catKeys.forEach((key: string) => {
+          if (!next.includes(key)) next.push(key);
         });
         return next;
       });
     } else {
-      setSelectedProducts(prev => prev.filter(url => !catUrls.includes(url)));
+      setSelectedProducts(prev => prev.filter(key => !catKeys.includes(key)));
     }
   };
 
-  const handleProductSelectToggle = (productUrl: string) => {
+  const handleProductSelectToggle = (key: string) => {
     setSelectedProducts(prev =>
-      prev.includes(productUrl)
-        ? prev.filter(url => url !== productUrl)
-        : [...prev, productUrl]
+      prev.includes(key)
+        ? prev.filter(k => k !== key)
+        : [...prev, key]
     );
   };
 
@@ -433,24 +501,93 @@ export default function Index() {
     }
   };
 
-  const handleQueueSelected = () => {
+  const handleQueueSelected = (customOverrides?: Record<string, string>) => {
     if (!crawlResult) return;
 
     const newSources: QueuedSource[] = [];
-    crawlResult.categories.forEach((cat: any) => {
-      (cat.products || []).forEach((prod: any) => {
-        if (selectedProducts.includes(prod.url)) {
-          newSources.push({
-            id: Math.random().toString(36).substring(7),
-            name: prod.url,
-            type: "url",
-            status: "queued",
-            markdown: "",
-            domain: crawlResult.domain
+    const addedUrls = new Set<string>();
+    const overrides = customOverrides || groupCollectionOverride;
+
+    if (groupSimilar) {
+      crawlResult.categories.forEach((cat: any) => {
+        const groups = groupedCategories[cat.name] || [];
+        groups.forEach((group: any, groupIdx: number) => {
+          group.variants.forEach((variant: any, variantIdx: number) => {
+            const key = `${cat.name}::grouped::${groupIdx}::${variantIdx}`;
+            if (selectedProducts.includes(key)) {
+              if (addedUrls.has(variant.url)) return;
+              addedUrls.add(variant.url);
+
+              const existingInfo = existingProductsMap[variant.url];
+              
+              let collectionId: string | undefined = undefined;
+              if (overrides[variant.name]) {
+                collectionId = overrides[variant.name];
+              } else if (overrides[group.title]) {
+                collectionId = overrides[group.title];
+              } else if (group.collection_match) {
+                collectionId = group.collection_match.id;
+              } else {
+                const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === cat.name.toLowerCase());
+                if (existingCol) collectionId = existingCol.id;
+              }
+
+              newSources.push({
+                id: Math.random().toString(36).substring(7),
+                name: variant.url,
+                type: "url",
+                status: "queued",
+                markdown: "",
+                domain: crawlResult.domain,
+                existingProductId: existingInfo?.id,
+                collections: collectionId ? [collectionId] : [],
+                overwriteOptions: existingInfo ? {
+                  title: globalOverwriteTitle,
+                  description: globalOverwriteDescription,
+                  variants: globalOverwriteVariants
+                } : undefined
+              });
+            }
           });
-        }
+        });
       });
-    });
+    } else {
+      crawlResult.categories.forEach((cat: any) => {
+        (cat.products || []).forEach((prod: any, prodIdx: number) => {
+          const key = `${cat.name}::standalone::${prodIdx}`;
+          if (selectedProducts.includes(key)) {
+            if (addedUrls.has(prod.url)) return;
+            addedUrls.add(prod.url);
+
+            const existingInfo = existingProductsMap[prod.url];
+            
+            let collectionId: string | undefined = undefined;
+            if (overrides[prod.name]) {
+              collectionId = overrides[prod.name];
+            } else {
+              const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === cat.name.toLowerCase());
+              if (existingCol) collectionId = existingCol.id;
+            }
+
+            newSources.push({
+              id: Math.random().toString(36).substring(7),
+              name: prod.url,
+              type: "url",
+              status: "queued",
+              markdown: "",
+              domain: crawlResult.domain,
+              existingProductId: existingInfo?.id,
+              collections: collectionId ? [collectionId] : [],
+              overwriteOptions: existingInfo ? {
+                title: globalOverwriteTitle,
+                description: globalOverwriteDescription,
+                variants: globalOverwriteVariants
+              } : undefined
+            });
+          }
+        });
+      });
+    }
 
     if (newSources.length === 0) return;
 
@@ -460,11 +597,190 @@ export default function Index() {
       return [...prev, ...uniqueNew];
     });
 
+    setActiveTab("queue");
     shopify.toast.show(`Queued ${newSources.length} products successfully!`);
   };
 
+  const handleExportQueue = () => {
+    if (queuedSources.length === 0) {
+      shopify.toast.show("Queue is empty, nothing to export!");
+      return;
+    }
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(queuedSources, null, 2));
+    const downloadAnchor = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `ingest-queue-${timestamp}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    shopify.toast.show("Queue exported successfully!");
+  };
+
+  const handleBulkImportAndCreateCategories = async () => {
+    if (!crawlResult) return;
+
+    const titlesToCreate = new Set<string>();
+    const collectionIdMap: Record<string, string> = {};
+
+    const shopifyCollectionsMap: Record<string, string> = {};
+    shopifyCollections.forEach(c => {
+      shopifyCollectionsMap[c.title.toLowerCase()] = c.id;
+    });
+
+    if (groupSimilar) {
+      crawlResult.categories.forEach((cat: any) => {
+        const groups = groupedCategories[cat.name] || [];
+        groups.forEach((group: any, groupIdx: number) => {
+          const hasSelected = group.variants.some((v: any, variantIdx: number) =>
+            selectedProducts.includes(`${cat.name}::grouped::${groupIdx}::${variantIdx}`)
+          );
+          if (hasSelected) {
+            const overrideId = groupCollectionOverride[group.title];
+            if (overrideId) {
+              if (overrideId.startsWith("custom_")) {
+                const customCol = customCollections.find(c => c.id === overrideId);
+                if (customCol) {
+                  const existingId = shopifyCollectionsMap[customCol.title.toLowerCase()];
+                  if (existingId) {
+                    collectionIdMap[overrideId] = existingId;
+                  } else {
+                    titlesToCreate.add(customCol.title);
+                  }
+                }
+              } else if (overrideId.startsWith("gid://shopify/Collection/")) {
+                collectionIdMap[overrideId] = overrideId;
+              }
+            } else if (group.collection_match) {
+              collectionIdMap[group.title] = group.collection_match.id;
+            } else {
+              const existingId = shopifyCollectionsMap[cat.name.toLowerCase()];
+              if (existingId) {
+                collectionIdMap[cat.name] = existingId;
+              } else {
+                titlesToCreate.add(cat.name);
+              }
+            }
+          }
+        });
+      });
+    } else {
+      crawlResult.categories.forEach((cat: any) => {
+        let hasSelected = false;
+        (cat.products || []).forEach((p: any, prodIdx: number) => {
+          const key = `${cat.name}::standalone::${prodIdx}`;
+          if (selectedProducts.includes(key)) {
+            hasSelected = true;
+          }
+        });
+        if (hasSelected) {
+          const existingId = shopifyCollectionsMap[cat.name.toLowerCase()];
+          if (existingId) {
+            collectionIdMap[cat.name] = existingId;
+          } else {
+            titlesToCreate.add(cat.name);
+          }
+        }
+      });
+    }
+
+    if (titlesToCreate.size === 0 && Object.keys(collectionIdMap).length === 0 && selectedProducts.length === 0) {
+      shopify.toast.show("No products selected!");
+      return;
+    }
+
+    const newCollectionsList: any[] = [];
+    if (titlesToCreate.size > 0) {
+      shopify.toast.show(`Creating ${titlesToCreate.size} new collections...`);
+      for (const title of titlesToCreate) {
+        try {
+          const res = await fetch("/api/collections", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title })
+          });
+          const data = await res.json();
+          if (data.success && data.collection) {
+            collectionIdMap[title] = data.collection.id;
+            newCollectionsList.push({
+              id: data.collection.id,
+              title: data.collection.title,
+              handle: data.collection.handle,
+              productsCount: 0
+            });
+          } else {
+            console.error("Failed to create collection", title, data.error);
+          }
+        } catch (err) {
+          console.error("Failed to create collection", title, err);
+        }
+      }
+      if (newCollectionsList.length > 0) {
+        setShopifyCollections(prev => [...prev, ...newCollectionsList]);
+      }
+    }
+
+    const newOverrides = { ...groupCollectionOverride };
+    if (groupSimilar) {
+      crawlResult.categories.forEach((cat: any) => {
+        const groups = groupedCategories[cat.name] || [];
+        groups.forEach((group: any, groupIdx: number) => {
+          const hasSelected = group.variants.some((v: any, variantIdx: number) =>
+            selectedProducts.includes(`${cat.name}::grouped::${groupIdx}::${variantIdx}`)
+          );
+          if (hasSelected) {
+            const overrideId = groupCollectionOverride[group.title];
+            let finalId: string | undefined = undefined;
+            if (overrideId) {
+              if (overrideId.startsWith("custom_")) {
+                const customCol = customCollections.find(c => c.id === overrideId);
+                if (customCol) {
+                  finalId = collectionIdMap[customCol.title] || collectionIdMap[overrideId];
+                }
+              } else {
+                finalId = overrideId;
+              }
+            } else if (group.collection_match) {
+              finalId = group.collection_match.id;
+            } else {
+              finalId = collectionIdMap[cat.name];
+            }
+
+            if (finalId) {
+              group.variants.forEach((v: any) => {
+                newOverrides[v.name] = finalId;
+              });
+            }
+          }
+        });
+      });
+    } else {
+      crawlResult.categories.forEach((cat: any) => {
+        const finalId = collectionIdMap[cat.name];
+        if (finalId) {
+          (cat.products || []).forEach((p: any, prodIdx: number) => {
+            const key = `${cat.name}::standalone::${prodIdx}`;
+            if (selectedProducts.includes(key)) {
+              newOverrides[p.name] = finalId;
+            }
+          });
+        }
+      });
+    }
+
+    setGroupCollectionOverride(newOverrides);
+
+    // Queue selected products with resolved collections overrides
+    handleQueueSelected(newOverrides);
+
+    setIsProcessingQueue(true);
+    setIsAutoPublishing(true);
+    setActiveTab("queue");
+    shopify.toast.show("Bulk operation started! Sit back and relax.");
+  };
+
   // Grouping & Extraction States
-  const [groupSimilar, setGroupSimilar] = useState(false);
+  const [groupSimilar, setGroupSimilar] = useState(true);
   const [isGrouping, setIsGrouping] = useState(false);
   const [groupedCategories, setGroupedCategories] = useState<Record<string, any[]>>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
@@ -478,7 +794,11 @@ export default function Index() {
   const [isExtracting, setIsExtracting] = useState(false);
 
   // Review modal editing states
+  const [reviewOverwriteTitle, setReviewOverwriteTitle] = useState(true);
+  const [reviewOverwriteDescription, setReviewOverwriteDescription] = useState(true);
+  const [reviewOverwriteVariants, setReviewOverwriteVariants] = useState(true);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [isAutoPublishing, setIsAutoPublishing] = useState(false);
   const [reviewTitle, setReviewTitle] = useState("");
   const [reviewDescription, setReviewDescription] = useState("");
   const [reviewSku, setReviewSku] = useState("");
@@ -499,6 +819,109 @@ export default function Index() {
   const [reviewCurrency, setReviewCurrency] = useState("USD");
   const [reviewPriceUnit, setReviewPriceUnit] = useState("");
   const [isPublishing, setIsPublishing] = useState(false);
+  const [activeIngestMethod, setActiveIngestMethod] = useState<"single_url" | "document" | "website_crawl">("website_crawl");
+
+  const sanitizeCrawlResult = (data: any) => {
+    if (!data || !data.categories) return data;
+    return {
+      ...data,
+      categories: data.categories.map((cat: any) => ({
+        ...cat,
+        products: (cat.products || []).map((p: any, idx: number) => ({
+          ...p,
+          id: p.id || `${cat.name}::${idx}::${p.url || p.name}`
+        }))
+      }))
+    };
+  };
+
+  const performGroupingForData = async (crawlData: any, currentCollections: any[]) => {
+    setIsGrouping(true);
+    const newGroupedCats: Record<string, any[]> = {};
+    let totalStats = { total: 0, matched: 0, new: 0 };
+
+    try {
+      let collections = currentCollections;
+      if (collections.length === 0) {
+        try {
+          const colRes = await fetch("/api/collections");
+          const colData = await colRes.json();
+          if (colData.success && colData.collections) {
+            setShopifyCollections(colData.collections);
+            collections = colData.collections;
+          }
+        } catch (_) {}
+      }
+
+      for (const category of crawlData.categories) {
+        const catProducts = category.products || [];
+        if (catProducts.length <= 1) {
+          newGroupedCats[category.name] = catProducts.map((p: any) => ({
+            title: p.name,
+            is_grouped: false,
+            variants: [p],
+            collection_match: null,
+          }));
+          totalStats.total += catProducts.length;
+          totalStats.new += catProducts.length;
+          continue;
+        }
+
+        try {
+          const res = await fetch("/api/group-variants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ products: catProducts, collections }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            newGroupedCats[category.name] = data.grouped;
+            if (data.stats) {
+              totalStats.total += data.stats.total;
+              totalStats.matched += data.stats.matched;
+              totalStats.new += data.stats.new;
+            }
+          } else {
+            newGroupedCats[category.name] = catProducts.map((p: any) => ({
+              title: p.name,
+              is_grouped: false,
+              variants: [p],
+              collection_match: null,
+            }));
+            totalStats.total += catProducts.length;
+            totalStats.new += catProducts.length;
+          }
+        } catch (innerErr) {
+          console.error("Failed to group variants for category:", category.name, innerErr);
+          newGroupedCats[category.name] = catProducts.map((p: any) => ({
+            title: p.name,
+            is_grouped: false,
+            variants: [p],
+            collection_match: null,
+          }));
+          totalStats.total += catProducts.length;
+          totalStats.new += catProducts.length;
+        }
+      }
+      setGroupedCategories(newGroupedCats);
+      setGroupingStats({ total: totalStats.total, matched: totalStats.matched, newCount: totalStats.new });
+
+      // Auto-select all grouped variants with path keys
+      const allGroupedKeys: string[] = [];
+      Object.entries(newGroupedCats).forEach(([catName, groups]) => {
+        groups.forEach((group: any, groupIdx: number) => {
+          group.variants.forEach((v: any, variantIdx: number) => {
+            allGroupedKeys.push(`${catName}::grouped::${groupIdx}::${variantIdx}`);
+          });
+        });
+      });
+      setSelectedProducts(allGroupedKeys);
+    } catch (err) {
+      shopify.toast.show("Error grouping variants");
+    } finally {
+      setIsGrouping(false);
+    }
+  };
 
   const isHtmlViewerLink = (urlStr: string) => {
     if (!urlStr) return false;
@@ -661,6 +1084,17 @@ export default function Index() {
   const handleOpenReviewModal = () => {
     if (!extractedProduct) return;
     
+    const selectedSource = queuedSources.find(s => s.id === selectedSourceId);
+    if (selectedSource?.overwriteOptions) {
+      setReviewOverwriteTitle(selectedSource.overwriteOptions.title);
+      setReviewOverwriteDescription(selectedSource.overwriteOptions.description);
+      setReviewOverwriteVariants(selectedSource.overwriteOptions.variants);
+    } else {
+      setReviewOverwriteTitle(true);
+      setReviewOverwriteDescription(true);
+      setReviewOverwriteVariants(true);
+    }
+
     setReviewTitle(extractedProduct.title || "");
     setReviewDescription(extractedProduct.short_description || "");
     setReviewSku(extractedProduct.sku || "");
@@ -804,6 +1238,14 @@ export default function Index() {
         options: reviewOptions,
         media_links: reviewMediaLinks.filter(m => m.selected).map(m => ({ url: m.url, alt: m.alt })),
         file_links: reviewFileLinks.filter(f => f.selected).map(f => ({ url: f.url, text: f.text, embed: f.embed })),
+        
+        existingProductId: queuedSources.find(s => s.id === selectedSourceId)?.existingProductId,
+        sourceUrl: queuedSources.find(s => s.id === selectedSourceId)?.name,
+        sourceDomain: queuedSources.find(s => s.id === selectedSourceId)?.domain,
+        overwriteTitle: reviewOverwriteTitle,
+        overwriteDescription: reviewOverwriteDescription,
+        overwriteVariants: reviewOverwriteVariants,
+        collections: queuedSources.find(s => s.id === selectedSourceId)?.collections || [],
       };
       
       const res = await fetch("/api/publish", {
@@ -834,13 +1276,106 @@ export default function Index() {
     }
   };
 
+  useEffect(() => {
+    if (!isAutoPublishing) return;
+
+    const nextReady = queuedSources.find(s => s.status === "ready" && !s.name.startsWith("✓"));
+    
+    if (!nextReady) {
+      if (queuedSources.some(s => s.status === "queued" || s.status === "converting")) {
+        return; // wait for processing
+      }
+      setIsAutoPublishing(false);
+      shopify.toast.show("Auto-publish complete!");
+      return;
+    }
+
+    const currentlyPublishing = queuedSources.filter(s => s.status === "publishing").length;
+    if (currentlyPublishing > 0) return;
+
+    const publishNext = async () => {
+      setQueuedSources(prev => prev.map(s => s.id === nextReady.id ? { ...s, status: "publishing" } : s));
+      setSelectedSourceId(nextReady.id);
+      
+      try {
+        const res = await fetch("/api/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            markdown: nextReady.markdown,
+            domain: nextReady.domain,
+            url: nextReady.type === "url" ? nextReady.name : undefined
+          }),
+        });
+        const extractData = await res.json();
+
+        if (extractData.success) {
+           const productData = extractData.is_multi && extractData.products?.length > 0 ? extractData.products[0] : extractData;
+           
+           const payload: any = {
+             title: productData.title,
+             descriptionHtml: markdownToDescriptionHtml(productData.short_description || ""),
+             sku: productData.sku,
+             price: productData.price || "0.00",
+             currency: productData.currency || "USD",
+             price_unit: productData.price_unit,
+             purchase_type: productData.purchase_type || "direct_buy",
+             specifications: (productData.specifications || []).map((s: any) => ({
+               name: s.name,
+               value: s.displayValue || (s.value !== null && s.value !== undefined ? (s.unit ? `${s.value} ${s.unit}` : String(s.value)) : String(s.rawValue)),
+             })),
+             variants: productData.variants || [],
+             options: productData.options || [],
+             media_links: productData.media_links || [],
+             file_links: productData.file_links || [],
+             existingProductId: nextReady.existingProductId,
+             sourceUrl: nextReady.name,
+             sourceDomain: nextReady.domain,
+             overwriteTitle: nextReady.overwriteOptions?.title ?? true,
+             overwriteDescription: nextReady.overwriteOptions?.description ?? true,
+             overwriteVariants: nextReady.overwriteOptions?.variants ?? true,
+             collections: nextReady.collections || productData.collections || [],
+             vendor: productData.vendor
+           };
+
+           const pubRes = await fetch("/api/publish", {
+             method: "POST",
+             headers: { "Content-Type": "application/json" },
+             body: JSON.stringify(payload),
+           });
+           const pubData = await pubRes.json();
+
+           if (pubData.success) {
+             setQueuedSources(prev => prev.map(s => s.id === nextReady.id ? { ...s, name: `✓ ${s.name}`, status: "ready" } : s));
+           } else {
+             setQueuedSources(prev => prev.map(s => s.id === nextReady.id ? { ...s, status: "failed", error: pubData.error } : s));
+           }
+        } else {
+          setQueuedSources(prev => prev.map(s => s.id === nextReady.id ? { ...s, status: "failed", error: extractData.error } : s));
+        }
+      } catch (err: any) {
+        setQueuedSources(prev => prev.map(s => s.id === nextReady.id ? { ...s, status: "failed", error: err.message } : s));
+      }
+    };
+
+    publishNext();
+  }, [isAutoPublishing, queuedSources, crawlResult, groupCollectionOverride]);
+
   // --- Session Persistence & Queue Processing ---
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ingest_ai_session");
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.queuedSources) setQueuedSources(parsed.queuedSources);
+        if (parsed.queuedSources) {
+          // Reset any stuck statuses from a previous session reload
+          const resetSources = parsed.queuedSources.map((s: QueuedSource) => {
+            if (s.status === "converting") return { ...s, status: "queued" };
+            if (s.status === "publishing") return { ...s, status: "ready" };
+            return s;
+          });
+          setQueuedSources(resetSources);
+        }
         if (parsed.crawlResult) setCrawlResult(parsed.crawlResult);
         if (parsed.customCollections) setCustomCollections(parsed.customCollections);
         if (parsed.selectedSourceId) setSelectedSourceId(parsed.selectedSourceId);
@@ -876,11 +1411,11 @@ export default function Index() {
 
     let isMounted = true;
     const processNext = async () => {
-      // Randomize the delay to avoid forming a predictable pattern
-      // Wait between throttleDelay and (throttleDelay * 1.8) milliseconds
+      setQueuedSources(prev => prev.map(s => s.id === nextSource.id ? { ...s, status: "converting" } : s));
+      
       const randomDelay = throttleDelay + Math.floor(Math.random() * (throttleDelay * 0.8));
       await new Promise(r => setTimeout(r, randomDelay));
-      if (!isMounted) return;
+      
       triggerUrlIngestion(nextSource);
     };
 
@@ -944,7 +1479,19 @@ export default function Index() {
 
   const handleGroupToggle = async (checked: boolean) => {
     setGroupSimilar(checked);
-    if (!checked || !crawlResult) return;
+    if (!checked) {
+      if (crawlResult) {
+        const allStandaloneKeys: string[] = [];
+        crawlResult.categories.forEach((cat: any) => {
+          (cat.products || []).forEach((p: any, prodIdx: number) => {
+            allStandaloneKeys.push(`${cat.name}::standalone::${prodIdx}`);
+          });
+        });
+        setSelectedProducts(allStandaloneKeys);
+      }
+      return;
+    }
+    if (!crawlResult) return;
 
     setIsGrouping(true);
     const newGroupedCats: Record<string, any[]> = {};
@@ -981,20 +1528,32 @@ export default function Index() {
           continue;
         }
 
-        const res = await fetch("/api/group-variants", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ products: catProducts, collections }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          newGroupedCats[category.name] = data.grouped;
-          if (data.stats) {
-            totalStats.total += data.stats.total;
-            totalStats.matched += data.stats.matched;
-            totalStats.new += data.stats.new;
+        try {
+          const res = await fetch("/api/group-variants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ products: catProducts, collections }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            newGroupedCats[category.name] = data.grouped;
+            if (data.stats) {
+              totalStats.total += data.stats.total;
+              totalStats.matched += data.stats.matched;
+              totalStats.new += data.stats.new;
+            }
+          } else {
+            newGroupedCats[category.name] = catProducts.map((p: any) => ({
+              title: p.name,
+              is_grouped: false,
+              variants: [p],
+              collection_match: null,
+            }));
+            totalStats.total += catProducts.length;
+            totalStats.new += catProducts.length;
           }
-        } else {
+        } catch (innerErr) {
+          console.error("Failed to group variants in toggle for category:", category.name, innerErr);
           newGroupedCats[category.name] = catProducts.map((p: any) => ({
             title: p.name,
             is_grouped: false,
@@ -1007,6 +1566,17 @@ export default function Index() {
       }
       setGroupedCategories(newGroupedCats);
       setGroupingStats({ total: totalStats.total, matched: totalStats.matched, newCount: totalStats.new });
+
+      // Auto-select all grouped variants with path keys
+      const allGroupedKeys: string[] = [];
+      Object.entries(newGroupedCats).forEach(([catName, groups]) => {
+        groups.forEach((group: any, groupIdx: number) => {
+          group.variants.forEach((v: any, variantIdx: number) => {
+            allGroupedKeys.push(`${catName}::grouped::${groupIdx}::${variantIdx}`);
+          });
+        });
+      });
+      setSelectedProducts(allGroupedKeys);
     } catch (err) {
       shopify.toast.show("Error grouping variants");
     } finally {
@@ -1021,18 +1591,21 @@ export default function Index() {
     }));
   };
 
-  const handleGroupSelectToggle = (group: any, checked: boolean) => {
-    const groupUrls = (group.variants || []).map((v: any) => v.url);
+  const handleGroupSelectToggle = (categoryName: string, groupIdx: number, group: any, checked: boolean) => {
+    const groupKeys: string[] = [];
+    (group.variants || []).forEach((v: any, variantIdx: number) => {
+      groupKeys.push(`${categoryName}::grouped::${groupIdx}::${variantIdx}`);
+    });
     if (checked) {
       setSelectedProducts(prev => {
         const next = [...prev];
-        groupUrls.forEach((url: string) => {
-          if (!next.includes(url)) next.push(url);
+        groupKeys.forEach((key: string) => {
+          if (!next.includes(key)) next.push(key);
         });
         return next;
       });
     } else {
-      setSelectedProducts(prev => prev.filter(url => !groupUrls.includes(url)));
+      setSelectedProducts(prev => prev.filter(key => !groupKeys.includes(key)));
     }
   };
 
@@ -1076,859 +1649,1575 @@ export default function Index() {
   ];
 
   return (
-    <s-page heading="Product Ingest AI">
+    <s-page heading="Product Ingest AI" full-width>
       <s-button 
         slot="primary-action" 
-        onClick={() => shopify.toast.show("Plan 1 complete: Drag-drop & URL parsing functional")}
+        onClick={handleExportQueue}
       >
-        Save Queue
+        Export Queue
       </s-button>
 
-      {/* Connection & Welcome Section */}
-      <s-section heading="🎉 Welcome to Product Ingest AI Dashboard">
-        <s-paragraph>
-          This app is successfully installed on <strong>{storeName}</strong>. 
-          Upload product documents or parse single URL structures.
-        </s-paragraph>
-        
-        <s-stack direction="inline" gap="base" align="center" style={{ marginTop: "1rem" }}>
-          <s-text><strong>Service Status:</strong></s-text>
-          <s-box 
-            padding="tight" 
-            borderRadius="base" 
-            background={pythonServiceStatus === "online" ? "success-subdued" : "critical-subdued"}
-            style={{ display: "inline-block" }}
-          >
-            <s-text color={pythonServiceStatus === "online" ? "success" : "critical"}>
-              ● Python Service: {pythonServiceStatus.toUpperCase()}
-            </s-text>
-          </s-box>
-          <s-box padding="tight" borderRadius="base" background="success-subdued" style={{ display: "inline-block" }}>
-            <s-text color="success">● Shopify API: CONNECTED</s-text>
-          </s-box>
-        </s-stack>
-      </s-section>
+      {/* 3-Stage Premium Wizard Progress Indicator */}
+      <div style={{
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "space-between",
+        gap: "12px",
+        marginBottom: "24px",
+        padding: "8px 12px",
+        background: "white",
+        borderRadius: "12px",
+        border: "1px solid #e1e3e5",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.03)"
+      }}>
+        {/* Step 1 */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("ingest")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "10px 16px",
+            border: "none",
+            borderRadius: "8px",
+            background: activeTab === "ingest" 
+              ? "linear-gradient(135deg, #f0fdf4 0%, #e6f4ea 100%)" 
+              : "transparent",
+            color: activeTab === "ingest" ? "#008060" : "#5c5f62",
+            borderLeft: activeTab === "ingest" ? "4px solid #008060" : "4px solid transparent",
+            cursor: "pointer",
+            transition: "all 0.2s ease",
+            textAlign: "left"
+          }}
+        >
+          <span style={{ fontSize: "10px", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.5px", color: activeTab === "ingest" ? "#008060" : "#8c9196" }}>Step 1</span>
+          <span style={{ fontSize: "13px", fontWeight: 600, marginTop: "2px", display: "flex", alignItems: "center", gap: "6px" }}>
+            📥 Ingest Sources
+          </span>
+        </button>
 
-      {/* Ingestion Source Panel */}
-      <s-section heading="📥 Ingest New Sources">
-        <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-          
-          {/* File Dropzone */}
-          <div style={{ flex: 1, minWidth: "280px" }}>
-            <s-heading>Drag & Drop Documents</s-heading>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragOver(true);
-              }}
-              onDragLeave={() => setIsDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragOver(false);
-                if (e.dataTransfer.files?.[0]) {
-                  handleFileUpload(e.dataTransfer.files[0]);
-                }
-              }}
-              style={{
-                border: isDragOver ? "2px dashed #008060" : "2px dashed #bbb",
-                borderRadius: "8px",
-                padding: "40px 20px",
-                textAlign: "center",
-                background: isDragOver ? "#f0f8f4" : "#fafafa",
-                cursor: "pointer",
-                transition: "all 0.2s ease-in-out",
-                marginTop: "10px",
-              }}
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = ".pdf,.docx,.doc,.html,.txt";
-                input.onchange = (e) => {
-                  const file = (e.target as HTMLInputElement).files?.[0];
-                  if (file) handleFileUpload(file);
-                };
-                input.click();
-              }}
-            >
-              <s-text style={{ fontSize: "28px" }}>📄</s-text>
-              <s-paragraph>
-                <strong>Drag & drop file here</strong> or click to browse
-              </s-paragraph>
-              <s-text variant="bodySm" color="subdued">
-                Supports PDF, DOCX, HTML up to 10MB
-              </s-text>
+        {/* Separator */}
+        <div style={{ display: "flex", alignItems: "center", color: "#c9cccf", fontSize: "14px", padding: "0 4px", userSelect: "none" }}>➔</div>
+
+        {/* Step 2 */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("crawl")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "10px 16px",
+            border: "none",
+            borderRadius: "8px",
+            background: activeTab === "crawl" 
+              ? "linear-gradient(135deg, #f0fdf4 0%, #e6f4ea 100%)" 
+              : "transparent",
+            color: activeTab === "crawl" ? "#008060" : "#5c5f62",
+            borderLeft: activeTab === "crawl" ? "4px solid #008060" : "4px solid transparent",
+            cursor: "pointer",
+            transition: "all 0.2s ease",
+            textAlign: "left"
+          }}
+        >
+          <span style={{ fontSize: "10px", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.5px", color: activeTab === "crawl" ? "#008060" : "#8c9196" }}>Step 2</span>
+          <span style={{ fontSize: "13px", fontWeight: 600, marginTop: "2px", display: "flex", alignItems: "center", gap: "6px", width: "100%", justifyContent: "space-between" }}>
+            <span>🔍 Crawl & Categorize</span>
+            {crawlResult && (
+              <span style={{
+                background: activeTab === "crawl" ? "#008060" : "#e1e3e5",
+                color: activeTab === "crawl" ? "white" : "#5c5f62",
+                padding: "2px 8px",
+                borderRadius: "10px",
+                fontSize: "10px",
+                fontWeight: 700
+              }}>
+                {selectedProducts.length}
+              </span>
+            )}
+          </span>
+        </button>
+
+        {/* Separator */}
+        <div style={{ display: "flex", alignItems: "center", color: "#c9cccf", fontSize: "14px", padding: "0 4px", userSelect: "none" }}>➔</div>
+
+        {/* Step 3 */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("queue")}
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "10px 16px",
+            border: "none",
+            borderRadius: "8px",
+            background: activeTab === "queue" 
+              ? "linear-gradient(135deg, #f0fdf4 0%, #e6f4ea 100%)" 
+              : "transparent",
+            color: activeTab === "queue" ? "#008060" : "#5c5f62",
+            borderLeft: activeTab === "queue" ? "4px solid #008060" : "4px solid transparent",
+            cursor: "pointer",
+            transition: "all 0.2s ease",
+            textAlign: "left"
+          }}
+        >
+          <span style={{ fontSize: "10px", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.5px", color: activeTab === "queue" ? "#008060" : "#8c9196" }}>Step 3</span>
+          <span style={{ fontSize: "13px", fontWeight: 600, marginTop: "2px", display: "flex", alignItems: "center", gap: "6px", width: "100%", justifyContent: "space-between" }}>
+            <span>🗂 Publish Queue</span>
+            {queuedSources.length > 0 && (
+              <span style={{
+                background: activeTab === "queue" ? "#008060" : "#e1e3e5",
+                color: activeTab === "queue" ? "white" : "#5c5f62",
+                padding: "2px 8px",
+                borderRadius: "10px",
+                fontSize: "10px",
+                fontWeight: 700
+              }}>
+                {queuedSources.length}
+              </span>
+            )}
+          </span>
+        </button>
+      </div>
+
+      {/* Stage 1: Ingest Sources */}
+      {activeTab === "ingest" && (
+        <>
+          <s-section heading="🎉 Welcome to Product Ingest AI Dashboard">
+            <s-paragraph>
+              This app is successfully installed on <strong>{storeName}</strong>. 
+              Upload product documents or parse single URL structures.
+            </s-paragraph>
+            
+            <div style={{ display: "flex", gap: "12px", alignItems: "center", marginTop: "1rem" }}>
+              <span style={{ fontSize: "14px" }}><strong>Service Status:</strong></span>
+              <div 
+                style={{ 
+                  display: "inline-block", 
+                  padding: "4px 8px", 
+                  borderRadius: "4px", 
+                  backgroundColor: pythonServiceStatus === "online" ? "#e6f4ea" : "#fce8e6",
+                  color: pythonServiceStatus === "online" ? "#137333" : "#c5221f",
+                  fontSize: "12px",
+                  fontWeight: 600
+                }}
+              >
+                ● Python Service: {pythonServiceStatus.toUpperCase()}
+              </div>
+              <div 
+                style={{ 
+                  display: "inline-block", 
+                  padding: "4px 8px", 
+                  borderRadius: "4px", 
+                  backgroundColor: "#e6f4ea",
+                  color: "#137333",
+                  fontSize: "12px",
+                  fontWeight: 600
+                }}
+              >
+                ● Shopify API: CONNECTED
+              </div>
             </div>
-          </div>
+          </s-section>
 
-          {/* URL Ingress */}
-          <div style={{ flex: 1, minWidth: "280px" }}>
-            <s-heading>Parse Single Product URL</s-heading>
-            <form onSubmit={handleUrlSubmit} style={{ marginTop: "10px" }}>
-              <s-stack direction="block" gap="base">
-                <input
-                  type="url"
-                  placeholder="https://vendor.com/products/valve-100"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "10px 14px",
-                    borderRadius: "6px",
-                    border: "1px solid #ccc",
-                    fontSize: "14px",
-                    boxSizing: "border-box",
+          <s-section heading="📥 Ingest New Sources">
+            <div style={{
+              background: "#f0f4f9",
+              borderLeft: "4px solid #006fbb",
+              padding: "12px 16px",
+              borderRadius: "0 8px 8px 0",
+              marginBottom: "16px",
+              fontSize: "13px",
+              color: "#202223",
+              lineHeight: "1.5"
+            }}>
+              <strong style={{ display: "block", marginBottom: "4px" }}>💡 Step 1 Ingestion Guide:</strong>
+              1. Choose to scrape a <strong>Website Catalog</strong> (crawl whole site), parse a <strong>Single Product URL</strong>, or upload a <strong>Catalog PDF/Document</strong>.<br />
+              2. For crawling, enter the homepage URL and click <strong>Start Crawl & Discovery</strong>. The app will discover all collections and product pages automatically.<br />
+              3. Once crawl is complete, you will be automatically navigated to the <strong>Crawl & Categorize</strong> (Step 2) tab.
+            </div>
+
+            <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
+              Select an ingestion method to pull raw catalog data into the application.
+            </p>
+
+            {/* Ingestion Method Selection */}
+            <div style={{
+              display: "flex",
+              gap: "8px",
+              marginBottom: "20px",
+              padding: "4px",
+              background: "#f1f2f4",
+              borderRadius: "8px",
+              width: "fit-content"
+            }}>
+              <button
+                type="button"
+                onClick={() => setActiveIngestMethod("website_crawl")}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  border: "none",
+                  borderRadius: "6px",
+                  background: activeIngestMethod === "website_crawl" ? "white" : "transparent",
+                  color: activeIngestMethod === "website_crawl" ? "#008060" : "#5c5f62",
+                  boxShadow: activeIngestMethod === "website_crawl" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                🔍 Crawl Vendor Website
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveIngestMethod("single_url")}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  border: "none",
+                  borderRadius: "6px",
+                  background: activeIngestMethod === "single_url" ? "white" : "transparent",
+                  color: activeIngestMethod === "single_url" ? "#008060" : "#5c5f62",
+                  boxShadow: activeIngestMethod === "single_url" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                🔗 Single Product URL
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveIngestMethod("document")}
+                style={{
+                  padding: "8px 16px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  border: "none",
+                  borderRadius: "6px",
+                  background: activeIngestMethod === "document" ? "white" : "transparent",
+                  color: activeIngestMethod === "document" ? "#008060" : "#5c5f62",
+                  boxShadow: activeIngestMethod === "document" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease"
+                }}
+              >
+                📄 Upload Documents (PDF/DOCX)
+              </button>
+            </div>
+
+            {/* Conditionally Render Method Input */}
+            {activeIngestMethod === "website_crawl" && (
+              <div style={{
+                background: "white",
+                padding: "20px",
+                border: "1px solid #e1e3e5",
+                borderRadius: "8px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+              }}>
+                <s-heading>Crawl Vendor Catalog</s-heading>
+                <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
+                  To discover the entire category taxonomy and list of products, enter the vendor website domain below. The logical sitemap and structure crawler will automatically map out the catalog.
+                </p>
+                <form onSubmit={handleCrawlSubmit}>
+                  <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                    <input
+                      type="url"
+                      placeholder="https://mock-vendor.com"
+                      value={crawlUrlInput}
+                      onChange={(e) => setCrawlUrlInput(e.target.value)}
+                      style={{
+                        flex: 1,
+                        minWidth: "250px",
+                        padding: "10px 14px",
+                        borderRadius: "6px",
+                        border: "1px solid #ccc",
+                        fontSize: "14px",
+                        boxSizing: "border-box",
+                      }}
+                      required
+                    />
+                    <s-button type="submit" variant="primary" disabled={isCrawling}>
+                      {isCrawling ? "Crawling..." : "Discover Catalog"}
+                    </s-button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {activeIngestMethod === "single_url" && (
+              <div style={{
+                background: "white",
+                padding: "20px",
+                border: "1px solid #e1e3e5",
+                borderRadius: "8px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+              }}>
+                <s-heading>Parse Single Product URL</s-heading>
+                <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
+                  Provide a single product detail page URL to instantly scrape, extract attributes, and publish to Shopify.
+                </p>
+                <form onSubmit={handleUrlSubmit}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <input
+                      type="url"
+                      placeholder="https://vendor.com/products/valve-100"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: "6px",
+                        border: "1px solid #ccc",
+                        fontSize: "14px",
+                        boxSizing: "border-box",
+                      }}
+                      required
+                    />
+                    <s-button type="submit" variant="primary">
+                      Stage URL for Ingestion
+                    </s-button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {activeIngestMethod === "document" && (
+              <div style={{
+                background: "white",
+                padding: "20px",
+                border: "1px solid #e1e3e5",
+                borderRadius: "8px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+              }}>
+                <s-heading>Drag & Drop Documents</s-heading>
+                <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
+                  Upload product specification catalogs, brochures, or price sheets to extract and ingest product schemas.
+                </p>
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(true);
                   }}
-                  required
-                />
-                <s-button type="submit" variant="primary">
-                  Stage URL for Ingestion
-                </s-button>
-              </s-stack>
-            </form>
-          </div>
-
-        </div>
-      </s-section>
-
-      {/* Website Structure Discovery & Category Selection */}
-      <s-section heading="🔍 Crawl Vendor Website Catalog">
-        <s-paragraph>
-          Enter a vendor website domain to discover sitemaps, robots.txt rules, llms.txt, and taxonomy structure.
-        </s-paragraph>
-        <form onSubmit={handleCrawlSubmit} style={{ marginTop: "15px", marginBottom: "15px" }}>
-          <s-stack direction="inline" gap="base" align-items="center">
-            <input
-              type="url"
-              placeholder="https://mock-vendor.com"
-              value={crawlUrlInput}
-              onChange={(e) => setCrawlUrlInput(e.target.value)}
-              style={{
-                flex: 1,
-                minWidth: "250px",
-                padding: "10px 14px",
-                borderRadius: "6px",
-                border: "1px solid #ccc",
-                fontSize: "14px",
-                boxSizing: "border-box",
-              }}
-              required
-            />
-            <s-button type="submit" variant="primary" disabled={isCrawling}>
-              {isCrawling ? "Crawling..." : "Discover Catalog"}
-            </s-button>
-          </s-stack>
-        </form>
-
-        {isCrawling && (
-          <s-box padding="base" style={{ textAlign: "center" }}>
-            <s-spinner size="base" accessibility-label="Crawling website structure"></s-spinner>
-            <s-paragraph style={{ marginTop: "10px" }}>Logical crawler parsing sitemaps, robots, and schema.org...</s-paragraph>
-          </s-box>
-        )}
-
-        {crawlResult && (
-          <s-box padding="base" border="base" borderRadius="base" style={{ marginTop: "15px" }}>
-            <s-stack direction="block" gap="base">
-              {/* Site Metadata Badges */}
-              <s-stack direction="inline" gap="base">
-                <s-badge tone={crawlResult.mocked ? "warning" : "success"}>
-                  Domain: {crawlResult.domain}{crawlResult.mocked && " (Mocked)"}
-                </s-badge>
-                {crawlResult.llms_txt ? (
-                  <s-badge tone="info">llms.txt Discovered</s-badge>
-                ) : (
-                  <s-badge tone="neutral">No llms.txt</s-badge>
-                )}
-                {crawlResult.robots?.sitemaps?.length > 0 && (
-                  <s-badge tone="success">
-                    {crawlResult.robots.sitemaps.length} Sitemap(s) Found
-                  </s-badge>
-                )}
-                {crawlResult.robots?.crawl_delay && (
-                  <s-badge tone="attention">
-                    Delay: {crawlResult.robots.crawl_delay}s
-                  </s-badge>
-                )}
-              </s-stack>
-
-              {/* Collapsible llms.txt details if exists */}
-              {crawlResult.llms_txt && (
-                <s-box padding="small" background="subdued" borderRadius="base">
-                  <s-heading>llms.txt content</s-heading>
-                  <pre style={{ margin: "5px 0 0 0", fontSize: "11px", whiteSpace: "pre-wrap", background: "#f1f1f1", padding: "8px", borderRadius: "4px" }}>
-                    {crawlResult.llms_txt}
-                  </pre>
-                </s-box>
-              )}
-
-              {/* Collapsible Category Tree */}
-              <s-heading>Discovered Categories & Products</s-heading>
-              <s-paragraph>Select which categories or specific products to scrape and queue:</s-paragraph>
-
-              {/* Grouping Toggle Option */}
-              <s-box padding="small" background="subdued" borderRadius="base" style={{ marginBottom: "15px" }}>
-                <s-stack direction="inline" gap="base" align-items="center">
-                  <input
-                    type="checkbox"
-                    id="group-toggle"
-                    checked={groupSimilar}
-                    onChange={(e) => handleGroupToggle(e.target.checked)}
-                    style={{ cursor: "pointer", width: "16px", height: "16px" }}
-                  />
-                  <label htmlFor="group-toggle" style={{ cursor: "pointer", fontWeight: "bold" }}>
-                    Intelligently group similar series / variants (by SKU prefix & name similarity)
-                  </label>
-                  {isGrouping && <s-spinner size="base" accessibility-label="Grouping variants..."></s-spinner>}
-                </s-stack>
-              </s-box>
-
-              {/* Collection Grouping Stats Bar */}
-              {groupSimilar && groupingStats && (
-                <s-box
-                  padding="small"
-                  background="base"
-                  borderRadius="base"
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    if (e.dataTransfer.files?.[0]) {
+                      handleFileUpload(e.dataTransfer.files[0]);
+                    }
+                  }}
                   style={{
-                    marginBottom: "12px",
-                    border: "1px solid #e1e3e5",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "16px",
-                    flexWrap: "wrap"
+                    border: isDragOver ? "2px dashed #008060" : "2px dashed #bbb",
+                    borderRadius: "8px",
+                    padding: "40px 20px",
+                    textAlign: "center",
+                    background: isDragOver ? "#f0f8f4" : "#fafafa",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease-in-out",
+                    marginTop: "10px",
+                  }}
+                  onClick={() => {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".pdf,.docx,.doc,.html,.txt";
+                    input.onchange = (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
+                      if (file) handleFileUpload(file);
+                    };
+                    input.click();
                   }}
                 >
-                  <span style={{ fontWeight: 600, fontSize: "13px" }}>Collection Analysis:</span>
+                  <span style={{ fontSize: "28px" }}>📄</span>
+                  <p>
+                    <strong>Drag & drop file here</strong> or click to browse
+                  </p>
+                  <span style={{ fontSize: "12px", color: "#6d7175" }}>
+                    Supports PDF, DOCX, HTML up to 10MB
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Proceed to Next Step Navigation Footer */}
+            {(queuedSources.length > 0 || crawlResult) && (
+              <div style={{
+                marginTop: "24px",
+                paddingTop: "16px",
+                borderTop: "1px solid #e1e3e5",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: "12px",
+                alignItems: "center"
+              }}>
+                <span style={{ fontSize: "13px", color: "#6d7175" }}>
+                  {crawlResult ? "Catalog discovered! " : ""}{queuedSources.length > 0 ? `(${queuedSources.length} sources in queue)` : ""}
+                </span>
+                {crawlResult && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("crawl")}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "8px",
+                      border: "1px solid #c9cccf",
+                      background: "white",
+                      color: "#202223",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+                    }}
+                  >
+                    View Crawled Catalog ➔
+                  </button>
+                )}
+                {queuedSources.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("queue")}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "8px",
+                      border: "none",
+                      background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                      color: "white",
+                      cursor: "pointer",
+                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
+                    }}
+                  >
+                    Proceed to Publish Queue ➔
+                  </button>
+                )}
+              </div>
+            )}
+          </s-section>
+        </>
+      )}
+
+      {/* Stage 2: Crawl & Categorize */}
+      {activeTab === "crawl" && (
+        <>
+          <s-section heading="🔍 Crawled Vendor Website Catalog">
+            {isCrawling && (
+              <div style={{ textAlign: "center" }}>
+                <div style={{ padding: "16px" }}>
+                  <s-spinner size="base" accessibility-label="Crawling website structure"></s-spinner>
+                  <p style={{ marginTop: "10px", fontSize: "14px", color: "#5c5f62" }}>Logical crawler parsing sitemaps, robots, and schema.org...</p>
+                </div>
+              </div>
+            )}
+
+            {!isCrawling && !crawlResult && (
+              <div style={{ textAlign: "center", background: "#f9fafb", borderRadius: "8px", border: "1px dashed #c9cccf", padding: "30px 20px" }}>
+                <p style={{ color: "#6d7175", fontSize: "14px" }}>No crawled catalog data yet. Please go to the "Ingest Sources" tab and discover a catalog or upload a file.</p>
+              </div>
+            )}
+
+            {!isCrawling && crawlResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div style={{
+                  background: "#f0f4f9",
+                  borderLeft: "4px solid #006fbb",
+                  padding: "12px 16px",
+                  borderRadius: "0 8px 8px 0",
+                  marginBottom: "4px",
+                  fontSize: "13px",
+                  color: "#202223",
+                  lineHeight: "1.5"
+                }}>
+                  <strong style={{ display: "block", marginBottom: "4px" }}>💡 Step 2 Categorization Guide:</strong>
+                  1. Below is the list of discovered categories and products from the vendor's website.<br />
+                  2. Toggle <strong>Intelligently group similar series / variants</strong> to automatically group similar models together as Shopify variants.<br />
+                  3. Check the categories or individual products you want to import. You can map each group to a Shopify collection or choose to create new ones.<br />
+                  4. Click <strong>🚀 Bulk Import & Create Categories</strong> to push them into the Queue (Step 3).
+                </div>
+                {/* Site Metadata Badges */}
+                <div style={{ display: "flex", flexDirection: "row", gap: "12px", flexWrap: "wrap" }}>
                   <span style={{
-                    background: "#f0fdf4", color: "#166534",
-                    padding: "2px 10px", borderRadius: "12px",
-                    fontSize: "12px", fontWeight: 600, border: "1px solid #bbf7d0"
+                    padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600,
+                    background: crawlResult.mocked ? "#fff9e6" : "#e6f4ea",
+                    color: crawlResult.mocked ? "#b27800" : "#137333",
+                    border: `1px solid ${crawlResult.mocked ? "#ffe89e" : "#c4ebd0"}`
                   }}>
-                    ✓ {groupingStats.matched} matched to existing
+                    Domain: {crawlResult.domain}{crawlResult.mocked && " (Mocked)"}
                   </span>
-                  <span style={{
-                    background: "#fff7ed", color: "#9a3412",
-                    padding: "2px 10px", borderRadius: "12px",
-                    fontSize: "12px", fontWeight: 600, border: "1px solid #fed7aa"
-                  }}>
-                    + {groupingStats.newCount} new collections
-                  </span>
-                  <span style={{ color: "#6d7175", fontSize: "12px" }}>
-                    {groupingStats.total} total groups · {shopifyCollections.length} Shopify collections loaded
-                  </span>
-                </s-box>
-              )}
+                  {crawlResult.llms_txt ? (
+                    <span style={{
+                      padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600,
+                      background: "#e8f0fe", color: "#1a73e8", border: "1px solid #c2e7ff"
+                    }}>llms.txt Discovered</span>
+                  ) : (
+                    <span style={{
+                      padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600,
+                      background: "#f1f3f4", color: "#3c4043", border: "1px solid #dadce0"
+                    }}>No llms.txt</span>
+                  )}
+                  {crawlResult.robots?.sitemaps?.length > 0 && (
+                    <span style={{
+                      padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600,
+                      background: "#e6f4ea", color: "#137333", border: "1px solid #c4ebd0"
+                    }}>
+                      {crawlResult.robots.sitemaps.length} Sitemap(s) Found
+                    </span>
+                  )}
+                  {crawlResult.robots?.crawl_delay && (
+                    <span style={{
+                      padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: 600,
+                      background: "#fef7e0", color: "#b06000", border: "1px solid #fce8b2"
+                    }}>
+                      Delay: {crawlResult.robots.crawl_delay}s
+                    </span>
+                  )}
+                </div>
 
-              <div style={{ paddingLeft: "10px" }}>
+                {/* Collapsible llms.txt details if exists */}
+                {crawlResult.llms_txt && (
+                  <div style={{ padding: "8px", backgroundColor: "#f6f6f7", borderRadius: "4px", border: "1px solid #e1e3e5" }}>
+                    <h3 style={{ fontSize: "14px", fontWeight: 600, margin: "0 0 6px 0", color: "#202223" }}>llms.txt content</h3>
+                    <pre style={{ margin: "5px 0 0 0", fontSize: "11px", whiteSpace: "pre-wrap", background: "#f1f1f1", padding: "8px", borderRadius: "4px" }}>
+                      {crawlResult.llms_txt}
+                    </pre>
+                  </div>
+                )}
 
-                {crawlResult.categories.map((category: any) => {
-                  const isCatExpanded = !!expandedCategories[category.name];
-                  const catProducts = category.products || [];
-                  
-                  let catUrlsForCat: string[] = [];
-                  if (groupSimilar && groupedCategories[category.name]) {
-                    groupedCategories[category.name].forEach((group: any) => {
-                      if (group.is_grouped) {
-                        group.variants.forEach((v: any) => catUrlsForCat.push(v.url));
-                      } else {
-                        catUrlsForCat.push(group.variants[0].url);
-                      }
-                    });
-                  } else {
-                    catUrlsForCat = (category.products || []).map((p: any) => p.url);
-                  }
+                {/* Collapsible Category Tree */}
+                <h3 style={{ fontSize: "16px", fontWeight: 600, margin: "10px 0 4px 0", color: "#202223" }}>Discovered Categories & Products</h3>
+                <p style={{ fontSize: "14px", color: "#5c5f62", margin: "0 0 12px 0" }}>Select which categories or specific products to scrape and queue:</p>
 
-                  const selectedInCat = selectedProducts.filter(url => catUrlsForCat.includes(url));
-                  const isAllSelected = catUrlsForCat.length > 0 && selectedInCat.length === catUrlsForCat.length;
-                  const isSomeSelected = selectedInCat.length > 0 && !isAllSelected;
+                {/* Grouping Toggle Option */}
+                <div style={{ marginBottom: "15px", padding: "12px", background: "#f6f6f7", borderRadius: "6px" }}>
+                  <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      id="group-toggle"
+                      checked={groupSimilar}
+                      onChange={(e) => handleGroupToggle(e.target.checked)}
+                      style={{ cursor: "pointer", width: "16px", height: "16px" }}
+                    />
+                    <label htmlFor="group-toggle" style={{ cursor: "pointer", fontWeight: "bold" }}>
+                      Intelligently group similar series / variants (by SKU prefix & name similarity)
+                    </label>
+                    {isGrouping && <s-spinner size="base" accessibility-label="Grouping variants..."></s-spinner>}
+                  </div>
+                </div>
 
-                  return (
-                    <div key={category.name} style={{ marginBottom: "10px", borderBottom: "1px solid #f4f6f8", paddingBottom: "10px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                        <s-button
-                          variant="tertiary"
-                          icon={isCatExpanded ? "chevron-up" : "chevron-down"}
-                          onClick={() => toggleCategoryExpand(category.name)}
-                        />
-                        <input
-                          type="checkbox"
-                          checked={isAllSelected}
-                          ref={el => {
-                            if (el) el.indeterminate = isSomeSelected;
-                          }}
-                          onChange={(e) => handleCategorySelectToggle(category, e.target.checked)}
-                          style={{ cursor: "pointer", width: "16px", height: "16px" }}
-                        />
-                        <s-text type="strong">
-                          {category.name} ({category.product_count} products)
-                        </s-text>
-                      </div>
+                {/* Collection Grouping Stats Bar */}
+                {groupSimilar && groupingStats && (
+                  <div
+                    style={{
+                      border: "1px solid #e1e3e5",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "15px",
+                      flexWrap: "wrap",
+                      padding: "12px",
+                      background: "white",
+                      borderRadius: "6px",
+                      marginBottom: "12px",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, fontSize: "13px" }}>Collection Analysis:</span>
+                    <span style={{
+                      background: "#f0fdf4", color: "#166534",
+                      padding: "2px 10px", borderRadius: "12px",
+                      fontSize: "12px", fontWeight: 600, border: "1px solid #bbf7d0"
+                    }}>
+                      ✓ {groupingStats.matched} matched to existing
+                    </span>
+                    <span style={{
+                      background: "#fff7ed", color: "#9a3412",
+                      padding: "2px 10px", borderRadius: "12px",
+                      fontSize: "12px", fontWeight: 600, border: "1px solid #fed7aa"
+                    }}>
+                      + {groupingStats.newCount} new collections
+                    </span>
+                    <span style={{ color: "#6d7175", fontSize: "12px" }}>
+                      {groupingStats.total} total groups · {shopifyCollections.length} Shopify collections loaded
+                    </span>
+                  </div>
+                )}
 
-                      {isCatExpanded && (
-                        <div style={{ paddingLeft: "30px", marginTop: "8px" }}>
-                          {groupSimilar ? (
-                            (groupedCategories[category.name] || []).map((group: any) => {
-                              if (group.is_grouped) {
-                                const isGroupExpanded = !!expandedGroups[group.title];
-                                const groupUrls = group.variants.map((v: any) => v.url);
-                                const selectedInGroup = selectedProducts.filter(url => groupUrls.includes(url));
-                                const isAllGroupSelected = selectedInGroup.length === groupUrls.length;
-                                const isSomeGroupSelected = selectedInGroup.length > 0 && !isAllGroupSelected;
+                <div style={{ paddingLeft: "10px" }}>
 
-                                return (
-                                  <div key={group.title} style={{ margin: "10px 0", paddingLeft: "15px", borderLeft: `2px solid ${group.collection_match ? "#008060" : "#ffa500"}` }}>
-                                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
-                                      <s-button
-                                        variant="tertiary"
-                                        icon={isGroupExpanded ? "chevron-up" : "chevron-down"}
-                                        onClick={() => toggleGroupExpand(group.title)}
-                                      />
-                                      <input
-                                        type="checkbox"
-                                        checked={isAllGroupSelected}
-                                        ref={el => {
-                                          if (el) el.indeterminate = isSomeGroupSelected;
-                                        }}
-                                        onChange={(e) => handleGroupSelectToggle(group, e.target.checked)}
-                                        style={{ cursor: "pointer", width: "14px", height: "14px", marginTop: "4px" }}
-                                      />
-                                      <div style={{ flex: 1 }}>
-                                        <s-stack direction="inline" gap="tight" align-items="center" style={{ flexWrap: "wrap" }}>
-                                          <s-text type="strong">{group.title}</s-text>
-                                          <s-badge tone="info">{group.variants.length} Variants</s-badge>
-                                          {group.options && group.options.map((opt: string) => (
-                                            <s-chip key={opt} size="base">{opt}</s-chip>
-                                          ))}
-                                        </s-stack>
+                  {crawlResult.categories.map((category: any) => {
+                    const isCatExpanded = !!expandedCategories[category.name];
+                    const catProducts = category.products || [];
+                    
+                    const catKeysForCat: string[] = [];
+                    if (groupSimilar && groupedCategories[category.name]) {
+                      groupedCategories[category.name].forEach((group: any, groupIdx: number) => {
+                        group.variants.forEach((v: any, variantIdx: number) => {
+                          catKeysForCat.push(`${category.name}::grouped::${groupIdx}::${variantIdx}`);
+                        });
+                      });
+                    } else {
+                      catProducts.forEach((p: any, prodIdx: number) => {
+                        catKeysForCat.push(`${category.name}::standalone::${prodIdx}`);
+                      });
+                    }
 
-                                        {/* Collection assignment row */}
-                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
-                                          {/* Auto-match badge */}
-                                          {group.collection_match && groupCollectionOverride[group.title] === undefined && (
+                    const selectedInCat = selectedProducts.filter(key => catKeysForCat.includes(key));
+                    const isAllSelected = catKeysForCat.length > 0 && selectedInCat.length === catKeysForCat.length;
+                    const isSomeSelected = selectedInCat.length > 0 && !isAllSelected;
+
+                    return (
+                      <div key={category.name} style={{ marginBottom: "10px", borderBottom: "1px solid #f4f6f8", paddingBottom: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                          <button
+                            type="button"
+                            onClick={() => toggleCategoryExpand(category.name)}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              cursor: "pointer",
+                              padding: "4px 8px",
+                              fontSize: "14px",
+                              color: "#5c5f62",
+                              display: "inline-flex",
+                              alignItems: "center"
+                            }}
+                          >
+                            {isCatExpanded ? "▼" : "▶"}
+                          </button>
+                          <input
+                            type="checkbox"
+                            checked={isAllSelected}
+                            ref={el => {
+                              if (el) el.indeterminate = isSomeSelected;
+                            }}
+                            onChange={(e) => handleCategorySelectToggle(category, e.target.checked)}
+                            style={{ cursor: "pointer", width: "16px", height: "16px" }}
+                          />
+                          <strong style={{ fontSize: "14px", color: "#202223" }}>
+                            {category.name} ({category.product_count} products)
+                          </strong>
+                        </div>
+
+                        {isCatExpanded && (
+                          <div style={{ paddingLeft: "30px", marginTop: "8px" }}>
+                            {groupSimilar && groupedCategories[category.name] ? (
+                              (groupedCategories[category.name] || []).map((group: any, groupIdx: number) => {
+                                if (group.is_grouped) {
+                                  const isGroupExpanded = !!expandedGroups[group.title];
+                                  const groupKeys = group.variants.map((v: any, variantIdx: number) => 
+                                    `${category.name}::grouped::${groupIdx}::${variantIdx}`
+                                  );
+                                  const selectedInGroup = selectedProducts.filter(key => groupKeys.includes(key));
+                                  const isAllGroupSelected = selectedInGroup.length === groupKeys.length;
+                                  const isSomeGroupSelected = selectedInGroup.length > 0 && !isAllGroupSelected;
+
+                                  return (
+                                    <div key={group.title} style={{ margin: "10px 0", paddingLeft: "15px", borderLeft: `2px solid ${group.collection_match ? "#008060" : "#ffa500"}` }}>
+                                      <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleGroupExpand(group.title)}
+                                          style={{
+                                            border: "none",
+                                            background: "transparent",
+                                            cursor: "pointer",
+                                            padding: "4px 8px",
+                                            fontSize: "12px",
+                                            color: "#5c5f62",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            marginTop: "2px"
+                                          }}
+                                        >
+                                          {isGroupExpanded ? "▼" : "▶"}
+                                        </button>
+                                        <input
+                                          type="checkbox"
+                                          checked={isAllGroupSelected}
+                                          ref={el => {
+                                            if (el) el.indeterminate = isSomeGroupSelected;
+                                          }}
+                                          onChange={(e) => handleGroupSelectToggle(category.name, groupIdx, group, e.target.checked)}
+                                          style={{ cursor: "pointer", width: "14px", height: "14px", marginTop: "6px" }}
+                                        />
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                                            <strong style={{ fontSize: "13px" }}>{group.title}</strong>
                                             <span style={{
-                                              background: "#f0fdf4", color: "#166534",
-                                              padding: "2px 8px", borderRadius: "10px",
-                                              fontSize: "11px", border: "1px solid #bbf7d0",
-                                              display: "inline-flex", alignItems: "center", gap: "4px"
-                                            }}>
-                                              📁 {group.collection_match.title}
-                                              <span style={{ opacity: 0.7 }}>
-                                                ({Math.round(group.collection_match.score * 100)}% match)
-                                              </span>
-                                            </span>
-                                          )}
-                                          {!group.collection_match && groupCollectionOverride[group.title] === undefined && (
-                                            <span style={{
-                                              background: "#fff7ed", color: "#9a3412",
-                                              padding: "2px 8px", borderRadius: "10px",
-                                              fontSize: "11px", border: "1px solid #fed7aa"
-                                            }}>
-                                              ✦ New Collection
-                                            </span>
-                                          )}
-                                          {groupCollectionOverride[group.title] !== undefined && (
-                                            <span style={{
-                                              background: groupCollectionOverride[group.title] ? "#f0fdf4" : "#fff7ed",
-                                              color: groupCollectionOverride[group.title] ? "#166534" : "#9a3412",
-                                              padding: "2px 8px", borderRadius: "10px",
+                                              padding: "2px 8px",
+                                              borderRadius: "10px",
                                               fontSize: "11px",
-                                              border: `1px solid ${groupCollectionOverride[group.title] ? "#bbf7d0" : "#fed7aa"}`
+                                              fontWeight: 600,
+                                              background: "#e0f2fe",
+                                              color: "#0369a1",
+                                              display: "inline-flex",
+                                              alignItems: "center"
                                             }}>
-                                              {groupCollectionOverride[group.title]
-                                                ? `📁 ${allCollections.find(c => c.id === groupCollectionOverride[group.title])?.title ?? "Selected"}`
-                                                : "✦ New Collection"}
+                                              {group.variants.length} Variants
                                             </span>
-                                          )}
-
-                                          {/* Override dropdown */}
-                                          <select
-                                            value={groupCollectionOverride[group.title] ?? (group.collection_match?.id ?? "")}
-                                            onChange={(e) => setGroupCollectionOverride(prev => ({
-                                              ...prev,
-                                              [group.title]: e.target.value
-                                            }))}
-                                            style={{
-                                              fontSize: "11px",
-                                              padding: "2px 6px",
-                                              borderRadius: "6px",
-                                              border: "1px solid #c9cccf",
-                                              background: "white",
-                                              cursor: "pointer",
-                                              maxWidth: "200px"
-                                            }}
-                                          >
-                                            <option value="">＋ Create new collection</option>
-                                            {allCollections.map((col) => (
-                                              <option key={col.id} value={col.id}>
-                                                {col.title} {col.productsCount !== undefined && col.productsCount > 0 ? `(${col.productsCount})` : ""}
-                                              </option>
+                                            {group.options && group.options.map((opt: string) => (
+                                              <span key={opt} style={{ padding: "2px 6px", background: "#e1e3e5", borderRadius: "4px", fontSize: "11px", fontWeight: 500 }}>{opt}</span>
                                             ))}
-                                          </select>
+                                          </div>
 
-                                          {/* New Collection Input */}
-                                          {groupCollectionOverride[group.title] === "" && (
-                                            <input
-                                              type="text"
-                                              placeholder="Collection name..."
-                                              autoFocus
-                                              onBlur={(e) => {
-                                                const val = e.target.value.trim();
-                                                if (val) {
-                                                  const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
-                                                  setCustomCollections(prev => [...prev, { id: newId, title: val }]);
-                                                  setGroupCollectionOverride(prev => ({ ...prev, [group.title]: newId }));
-                                                }
+                                          {/* Collection assignment row */}
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                                            {/* Auto-match badge */}
+                                            {group.collection_match && groupCollectionOverride[group.title] === undefined && (
+                                              <span style={{
+                                                background: "#f0fdf4", color: "#166534",
+                                                padding: "2px 8px", borderRadius: "10px",
+                                                fontSize: "11px", border: "1px solid #bbf7d0",
+                                                display: "inline-flex", alignItems: "center", gap: "4px"
+                                              }}>
+                                                📁 {group.collection_match.title}
+                                                <span style={{ opacity: 0.7 }}>
+                                                  ({Math.round(group.collection_match.score * 100)}% match)
+                                                </span>
+                                              </span>
+                                            )}
+                                            {!group.collection_match && groupCollectionOverride[group.title] === undefined && (
+                                              <span style={{
+                                                background: "#fff7ed", color: "#9a3412",
+                                                padding: "2px 8px", borderRadius: "10px",
+                                                fontSize: "11px", border: "1px solid #fed7aa"
+                                              }}>
+                                                ✦ New Collection
+                                              </span>
+                                            )}
+                                            {groupCollectionOverride[group.title] !== undefined && (
+                                              <span style={{
+                                                background: groupCollectionOverride[group.title] ? "#f0fdf4" : "#fff7ed",
+                                                color: groupCollectionOverride[group.title] ? "#166534" : "#9a3412",
+                                                padding: "2px 8px", borderRadius: "10px",
+                                                fontSize: "11px",
+                                                border: `1px solid ${groupCollectionOverride[group.title] ? "#bbf7d0" : "#fed7aa"}`
+                                              }}>
+                                                {groupCollectionOverride[group.title]
+                                                  ? `📁 ${shopifyCollections.find(c => c.id === groupCollectionOverride[group.title])?.title ?? "Selected"}`
+                                                  : "✦ New Collection"}
+                                              </span>
+                                            )}
+
+                                            {/* Override dropdown */}
+                                            <select
+                                              value={groupCollectionOverride[group.title] ?? (group.collection_match?.id ?? "")}
+                                              onChange={(e) => setGroupCollectionOverride(prev => ({
+                                                ...prev,
+                                                [group.title]: e.target.value
+                                              }))}
+                                              style={{
+                                                fontSize: "11px",
+                                                padding: "2px 6px",
+                                                borderRadius: "6px",
+                                                border: "1px solid #c9cccf",
+                                                background: "white",
+                                                cursor: "pointer",
+                                                maxWidth: "200px"
                                               }}
-                                              onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                  e.preventDefault();
-                                                  const val = e.currentTarget.value.trim();
+                                            >
+                                              <option value="">＋ Create new collection</option>
+                                              {shopifyCollections.map((col) => (
+                                                <option key={col.id} value={col.id}>
+                                                  {col.title} {col.productsCount !== undefined && col.productsCount > 0 ? `(${col.productsCount})` : ""}
+                                                </option>
+                                              ))}
+                                            </select>
+
+                                            {/* New Collection Input */}
+                                            {groupCollectionOverride[group.title] === "" && (
+                                              <input
+                                                type="text"
+                                                placeholder="Collection name..."
+                                                autoFocus
+                                                onBlur={(e) => {
+                                                  const val = e.target.value.trim();
                                                   if (val) {
                                                     const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
                                                     setCustomCollections(prev => [...prev, { id: newId, title: val }]);
                                                     setGroupCollectionOverride(prev => ({ ...prev, [group.title]: newId }));
                                                   }
-                                                }
-                                              }}
-                                              style={{
-                                                fontSize: "11px", padding: "2px 6px",
-                                                borderRadius: "6px", border: "1px solid #008060",
-                                                maxWidth: "150px"
-                                              }}
-                                            />
-                                          )}
+                                                }}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    const val = e.currentTarget.value.trim();
+                                                    if (val) {
+                                                      const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                      setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                      setGroupCollectionOverride(prev => ({ ...prev, [group.title]: newId }));
+                                                    }
+                                                  }
+                                                }}
+                                                style={{
+                                                  fontSize: "11px", padding: "2px 6px",
+                                                  borderRadius: "6px", border: "1px solid #008060",
+                                                  maxWidth: "150px"
+                                                }}
+                                              />
+                                            )}
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
 
-                                    {isGroupExpanded && (
-                                      <div style={{ paddingLeft: "45px", marginTop: "6px" }}>
-                                        {group.variants.map((variant: any) => {
-                                          const isChecked = selectedProducts.includes(variant.url);
-                                          return (
-                                            <div key={variant.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
-                                              <input
-                                                type="checkbox"
-                                                checked={isChecked}
-                                                onChange={() => handleProductSelectToggle(variant.url)}
-                                                style={{ cursor: "pointer" }}
-                                              />
-                                              <s-stack direction="block">
-                                                <s-text>{variant.name}</s-text>
-                                                <s-text variant="bodySm" color="subdued">
-                                                  {variant.url} {variant.option_values && `| ${JSON.stringify(variant.option_values)}`}
-                                                </s-text>
-                                              </s-stack>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              } else {
-                                const standalone = group.variants[0];
-                                const isChecked = selectedProducts.includes(standalone.url);
-                                const collMatch = group.collection_match;
-                                const overrideId = groupCollectionOverride[standalone.name];
-                                return (
-                                  <div key={standalone.url} style={{ margin: "6px 0", paddingLeft: "15px" }}>
-                                    <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
-                                      <input
-                                        type="checkbox"
-                                        checked={isChecked}
-                                        onChange={() => handleProductSelectToggle(standalone.url)}
-                                        style={{ cursor: "pointer", marginTop: "3px" }}
-                                      />
-                                      <div style={{ flex: 1 }}>
-                                        <s-stack direction="block">
-                                          <s-text>{standalone.name}</s-text>
-                                          <s-text variant="bodySm" color="subdued">{standalone.url}</s-text>
-                                        </s-stack>
-                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
-                                          {collMatch && overrideId === undefined && (
-                                            <span style={{
-                                              background: "#f0fdf4", color: "#166534",
-                                              padding: "1px 7px", borderRadius: "10px",
-                                              fontSize: "10px", border: "1px solid #bbf7d0"
-                                            }}>📁 {collMatch.title} ({Math.round(collMatch.score * 100)}%)</span>
-                                          )}
-                                          {!collMatch && overrideId === undefined && (
-                                            <span style={{
-                                              background: "#fff7ed", color: "#9a3412",
-                                              padding: "1px 7px", borderRadius: "10px",
-                                              fontSize: "10px", border: "1px solid #fed7aa"
-                                            }}>✦ New</span>
-                                          )}
-                                          <select
-                                            value={overrideId ?? (collMatch?.id ?? "")}
-                                            onChange={(e) => setGroupCollectionOverride(prev => ({
-                                              ...prev,
-                                              [standalone.name]: e.target.value
-                                            }))}
-                                            style={{
-                                              fontSize: "10px", padding: "1px 5px",
-                                              borderRadius: "5px", border: "1px solid #c9cccf",
-                                              background: "white", cursor: "pointer", maxWidth: "180px"
-                                            }}
-                                          >
-                                            <option value="">＋ New collection</option>
-                                            {allCollections.map((col) => (
-                                              <option key={col.id} value={col.id}>{col.title}</option>
-                                            ))}
-                                          </select>
-                                          
-                                          {/* New Collection Input */}
-                                          {overrideId === "" && (
-                                            <input
-                                              type="text"
-                                              placeholder="Collection name..."
-                                              autoFocus
-                                              onBlur={(e) => {
-                                                const val = e.target.value.trim();
-                                                if (val) {
-                                                  const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
-                                                  setCustomCollections(prev => [...prev, { id: newId, title: val }]);
-                                                  setGroupCollectionOverride(prev => ({ ...prev, [standalone.name]: newId }));
-                                                }
+                                      {isGroupExpanded && (
+                                        <div style={{ paddingLeft: "45px", marginTop: "6px" }}>
+                                          {group.variants.map((variant: any, variantIdx: number) => {
+                                            const pathKey = `${category.name}::grouped::${groupIdx}::${variantIdx}`;
+                                            const isChecked = selectedProducts.includes(pathKey);
+                                            return (
+                                              <div key={pathKey} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
+                                                <input
+                                                  type="checkbox"
+                                                  checked={isChecked}
+                                                  onChange={() => handleProductSelectToggle(pathKey)}
+                                                  style={{ cursor: "pointer" }}
+                                                />
+                                                <div style={{ display: "flex", flexDirection: "column" }}>
+                                                  <span style={{ fontSize: "13px", fontWeight: 500 }}>{variant.name}</span>
+                                                  <span style={{ fontSize: "12px", color: "#6d7175" }}>
+                                                    {variant.url} {variant.option_values && `| ${JSON.stringify(variant.option_values)}`}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                } else {
+                                  const standalone = group.variants[0];
+                                  const pathKey = `${category.name}::grouped::${groupIdx}::0`;
+                                  const isChecked = selectedProducts.includes(pathKey);
+                                  const collMatch = group.collection_match;
+                                  const overrideId = groupCollectionOverride[standalone.name];
+                                  return (
+                                    <div key={pathKey} style={{ margin: "6px 0", paddingLeft: "15px" }}>
+                                      <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", flexWrap: "wrap" }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => handleProductSelectToggle(pathKey)}
+                                          style={{ cursor: "pointer", marginTop: "3px" }}
+                                        />
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ display: "flex", flexDirection: "column" }}>
+                                            <span style={{ fontSize: "13px", fontWeight: 500 }}>{standalone.name}</span>
+                                            <span style={{ fontSize: "12px", color: "#6d7175" }}>{standalone.url}</span>
+                                          </div>
+                                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
+                                            {collMatch && overrideId === undefined && (
+                                              <span style={{
+                                                background: "#f0fdf4", color: "#166534",
+                                                padding: "1px 7px", borderRadius: "10px",
+                                                fontSize: "10px", border: "1px solid #bbf7d0"
+                                              }}>📁 {collMatch.title} ({Math.round(collMatch.score * 100)}%)</span>
+                                            )}
+                                            {!collMatch && overrideId === undefined && (
+                                              <span style={{
+                                                background: "#fff7ed", color: "#9a3412",
+                                                padding: "1px 7px", borderRadius: "10px",
+                                                fontSize: "10px", border: "1px solid #fed7aa"
+                                              }}>✦ New</span>
+                                            )}
+                                            <select
+                                              value={overrideId ?? (collMatch?.id ?? "")}
+                                              onChange={(e) => setGroupCollectionOverride(prev => ({
+                                                ...prev,
+                                                [standalone.name]: e.target.value
+                                              }))}
+                                              style={{
+                                                fontSize: "10px", padding: "1px 5px",
+                                                borderRadius: "5px", border: "1px solid #c9cccf",
+                                                background: "white", cursor: "pointer", maxWidth: "180px"
                                               }}
-                                              onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                  e.preventDefault();
-                                                  const val = e.currentTarget.value.trim();
+                                            >
+                                              <option value="">＋ New collection</option>
+                                              {shopifyCollections.map((col) => (
+                                                <option key={col.id} value={col.id}>{col.title}</option>
+                                              ))}
+                                            </select>
+                                            
+                                            {/* New Collection Input */}
+                                            {overrideId === "" && (
+                                              <input
+                                                type="text"
+                                                placeholder="Collection name..."
+                                                autoFocus
+                                                onBlur={(e) => {
+                                                  const val = e.target.value.trim();
                                                   if (val) {
                                                     const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
                                                     setCustomCollections(prev => [...prev, { id: newId, title: val }]);
                                                     setGroupCollectionOverride(prev => ({ ...prev, [standalone.name]: newId }));
                                                   }
-                                                }
-                                              }}
-                                              style={{
-                                                fontSize: "10px", padding: "1px 5px",
-                                                borderRadius: "5px", border: "1px solid #008060",
-                                                maxWidth: "120px"
-                                              }}
-                                            />
-                                          )}
+                                                }}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    const val = e.currentTarget.value.trim();
+                                                    if (val) {
+                                                      const newId = 'custom_' + Date.now() + Math.floor(Math.random()*1000);
+                                                      setCustomCollections(prev => [...prev, { id: newId, title: val }]);
+                                                      setGroupCollectionOverride(prev => ({ ...prev, [standalone.name]: newId }));
+                                                    }
+                                                  }
+                                                }}
+                                                style={{
+                                                  fontSize: "10px", padding: "1px 5px",
+                                                  borderRadius: "5px", border: "1px solid #008060",
+                                                  maxWidth: "120px"
+                                                }}
+                                              />
+                                            )}
+                                          </div>
                                         </div>
                                       </div>
                                     </div>
+                                  );
+                                }
+                              })
+                            ) : (
+                              catProducts.map((prod: any, prodIdx: number) => {
+                                const pathKey = `${category.name}::standalone::${prodIdx}`;
+                                const isChecked = selectedProducts.includes(pathKey);
+                                return (
+                                  <div key={pathKey} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleProductSelectToggle(pathKey)}
+                                      style={{ cursor: "pointer" }}
+                                    />
+                                    <div style={{ display: "flex", flexDirection: "column" }}>
+                                      <span style={{ fontSize: "13px", fontWeight: 500 }}>{prod.name}</span>
+                                      <span style={{ fontSize: "12px", color: "#6d7175" }}>{prod.url}</span>
+                                    </div>
                                   </div>
                                 );
-                              }
-                            })
-                          ) : (
-                            catProducts.map((prod: any) => {
-                              const isChecked = selectedProducts.includes(prod.url);
-                              return (
-                                <div key={prod.url} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "6px 0" }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={isChecked}
-                                    onChange={() => handleProductSelectToggle(prod.url)}
-                                    style={{ cursor: "pointer" }}
-                                  />
-                                  <s-stack direction="block">
-                                    <s-text>{prod.name}</s-text>
-                                    <s-text variant="bodySm" color="subdued">{prod.url}</s-text>
-                                  </s-stack>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: "flex", gap: "8px", marginTop: "20px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={handleBulkImportAndCreateCategories}
+                    disabled={selectedProducts.length === 0}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "6px",
+                      border: "none",
+                      background: selectedProducts.length === 0 
+                        ? "#e1e3e5" 
+                        : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                      color: selectedProducts.length === 0 ? "#8c9196" : "white",
+                      cursor: selectedProducts.length === 0 ? "not-allowed" : "pointer",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
+                    }}
+                  >
+                    🚀 Bulk Import & Create Categories ({selectedProducts.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQueueSelected()}
+                    disabled={selectedProducts.length === 0}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "6px",
+                      border: "1px solid #c9cccf",
+                      background: selectedProducts.length === 0 ? "#f6f6f7" : "white",
+                      color: selectedProducts.length === 0 ? "#8c9196" : "#202223",
+                      cursor: selectedProducts.length === 0 ? "not-allowed" : "pointer"
+                    }}
+                  >
+                    Queue Products Without Collection
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProducts([])}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "6px",
+                      border: "1px solid #c9cccf",
+                      background: "white",
+                      color: "#202223",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Clear Selection
+                  </button>
+                </div>
               </div>
-
-              {/* Action Buttons */}
-              <s-stack direction="inline" gap="base" style={{ marginTop: "10px" }}>
-                <s-button variant="primary" onClick={handleQueueSelected} disabled={selectedProducts.length === 0}>
-                  Queue Selected Products ({selectedProducts.length})
-                </s-button>
-                <s-button onClick={() => {
-                  setSelectedProducts([]);
-                }}>
-                  Clear Selection
-                </s-button>
-              </s-stack>
-            </s-stack>
-          </s-box>
-        )}
-      </s-section>
-
-      {/* Ingestion Queue List */}
-      {queuedSources.length > 0 && (
-        <s-section heading="🗂 Queued Ingestion Sources">
-          <s-stack direction="inline" gap="base" align-items="center" style={{ marginBottom: "15px", flexWrap: "wrap" }}>
-            <s-button 
-              variant={isProcessingQueue ? "destructive" : "primary"}
-              onClick={() => setIsProcessingQueue(!isProcessingQueue)}
-              disabled={!queuedSources.some(s => s.status === "queued") && !isProcessingQueue}
-            >
-              {isProcessingQueue ? "Pause Processing" : "Start Processing Queue"}
-            </s-button>
-            <s-button onClick={() => {
-              if (confirm("Clear all queued sources and session data?")) {
-                setQueuedSources([]);
-                setCrawlResult(null);
-                setCustomCollections([]);
-                setSelectedSourceId(null);
-                setIsProcessingQueue(false);
-                localStorage.removeItem("ingest_ai_session");
-              }
-            }}>
-              Clear Session
-            </s-button>
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
-              <s-text>Delay (ms):</s-text>
-              <input 
-                type="number" 
-                value={throttleDelay} 
-                onChange={(e) => setThrottleDelay(Number(e.target.value))}
-                min="500" 
-                step="500"
-                style={{ width: "80px", padding: "4px", borderRadius: "4px", border: "1px solid #ccc" }}
-              />
-            </div>
-          </s-stack>
-
-          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "10px" }}>
-            <thead>
-              <tr style={{ borderBottom: "2px solid #eee", textAlign: "left" }}>
-                <th style={{ padding: "8px" }}><s-text>Source Name</s-text></th>
-                <th style={{ padding: "8px" }}><s-text>Type</s-text></th>
-                <th style={{ padding: "8px" }}><s-text>Status</s-text></th>
-                <th style={{ padding: "8px" }}><s-text>Actions</s-text></th>
-              </tr>
-            </thead>
-            <tbody>
-              {queuedSources.map((source) => (
-                <tr 
-                  key={source.id} 
-                  style={{ 
-                    borderBottom: "1px solid #eee", 
-                    background: selectedSourceId === source.id ? "#f4f6f8" : "transparent"
-                  }}
-                >
-                  <td style={{ padding: "8px" }}>
-                    <s-link onClick={() => setSelectedSourceId(source.id)}>
-                      {source.name}
-                    </s-link>
-                  </td>
-                  <td style={{ padding: "8px" }}><s-text>{source.type.toUpperCase()}</s-text></td>
-                  <td style={{ padding: "8px" }}>
-                    <s-text color={
-                      source.status === "ready" ? "success" : 
-                      source.status === "failed" ? "critical" : 
-                      "subdued"
-                    }>
-                      {source.status.toUpperCase()}
-                    </s-text>
-                  </td>
-                  <td style={{ padding: "8px" }}>
-                    <s-stack direction="inline" gap="tight">
-                      <s-button onClick={() => setSelectedSourceId(source.id)} variant="tertiary">
-                        View
-                      </s-button>
-                      <s-button onClick={() => handleRemoveSource(source.id)} variant="tertiary" color="destructive">
-                        Remove
-                      </s-button>
-                    </s-stack>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </s-section>
+            )}
+          </s-section>
+        </>
       )}
 
-      {/* Interactive Conversion and Preview */}
-      {selectedSource && (
-        <s-section heading={`📝 Source Preview: ${selectedSource.name}`}>
-          {selectedSource.status === "converting" && (
-            <s-box padding="base" style={{ textAlign: "center" }}>
-              <s-paragraph>Converting source to Markdown using MarkItDown service...</s-paragraph>
-            </s-box>
-          )}
-
-          {selectedSource.status === "failed" && (
-            <s-box padding="base" background="critical-subdued" borderRadius="base">
-              <s-heading>Conversion Failed</s-heading>
-              <s-paragraph color="critical">{selectedSource.error}</s-paragraph>
-            </s-box>
-          )}
-
-          {selectedSource.status === "ready" && (
-            <s-stack direction="block" gap="base">
-              
-              {/* Multi-product warning banner */}
-              {isMultiProduct && (
-                <s-box padding="base" background="warning-subdued" borderRadius="base" style={{ borderLeft: "4px solid #e0b034" }}>
-                  <s-heading>⚠️ Multi-Product Source Detected</s-heading>
-                  <s-paragraph>
-                    This document appears to contain multiple products. We've highlighted the <strong>1st identified product</strong> schema below. 
-                    You can edit the parsed Markdown on the left to focus on other sections or proceed to parse all.
-                  </s-paragraph>
-                  <s-stack direction="inline" gap="base" style={{ marginTop: "8px" }}>
-                    <s-button onClick={handleScrapeFirstOnly}>
-                      Scrape 1st Product
-                    </s-button>
-                    <s-button onClick={handleSplitMultiProducts}>
-                      Identify More / Scrape All
-                    </s-button>
-                  </s-stack>
-                </s-box>
-              )}
-
-              {/* Grid Layout for Preview and Schema */}
-              <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", marginTop: "10px" }}>
-                
-                {/* Left: Editable Markdown Text Area */}
-                <div style={{ flex: 1, minWidth: "350px" }}>
-                  <s-heading>Editable Markdown Content</s-heading>
-                  <textarea
-                    value={editingMarkdown}
-                    onChange={(e) => setEditingMarkdown(e.target.value)}
-                    style={{
-                      width: "100%",
-                      height: "400px",
-                      padding: "12px",
-                      fontFamily: "monospace",
-                      fontSize: "13px",
-                      borderRadius: "6px",
-                      border: "1px solid #ccc",
-                      boxSizing: "border-box",
-                      marginTop: "8px",
-                      lineHeight: "1.5",
-                      resize: "vertical",
-                    }}
-                  />
-                </div>
-
-                {/* Right: AI Schema Mapping & Extraction Preview */}
-                <div style={{ flex: 1, minWidth: "300px" }}>
-                  <s-heading>AI Schema Mapping Preview</s-heading>
-                  
-                  {isExtracting && (
-                    <s-box padding="base" style={{ textAlign: "center" }}>
-                      <s-spinner size="base" accessibility-label="Extracting fields..."></s-spinner>
-                      <s-paragraph style={{ marginTop: "10px" }}>Running parser extraction and unit normalization...</s-paragraph>
-                    </s-box>
-                  )}
-
-                  {!isExtracting && extractedProduct && (
-                    <s-box padding="base" borderWidth="base" borderRadius="base" style={{ marginTop: "8px" }}>
-                      <s-stack direction="block" gap="base">
-                        <s-stack direction="inline" gap="base" align-items="center">
-                          <s-text type="strong">Title:</s-text>
-                          <s-text>{extractedProduct.title}</s-text>
-                        </s-stack>
-                        <s-stack direction="inline" gap="base" align-items="center">
-                          <s-text type="strong">SKU:</s-text>
-                          <s-text>{extractedProduct.sku}</s-text>
-                        </s-stack>
-                        <s-stack direction="inline" gap="base" align-items="center">
-                          <s-text type="strong">Purchase Type:</s-text>
-                          <s-badge tone={extractedProduct.purchase_type === "quote_only" ? "warning" : "success"}>
-                            {extractedProduct.purchase_type === "quote_only" ? "QUOTE ONLY (RFQ)" : "DIRECT BUY"}
-                          </s-badge>
-                        </s-stack>
-                        <s-stack direction="block" gap="extra-tight">
-                          <s-text type="strong">Description Summary:</s-text>
-                          <s-paragraph color="subdued">{extractedProduct.short_description}</s-paragraph>
-                        </s-stack>
-
-                        <s-divider></s-divider>
-                        
-                        <s-text type="strong">Normalized Specifications ({extractedProduct.specifications?.length || 0}):</s-text>
-                        {extractedProduct.specifications && extractedProduct.specifications.length > 0 ? (
-                          <div style={{ maxHeight: "250px", overflowY: "auto", border: "1px solid #eee", borderRadius: "4px", padding: "8px" }}>
-                            {extractedProduct.specifications.map((spec: any, idx: number) => (
-                              <div key={idx} style={{ padding: "6px 0", borderBottom: idx < extractedProduct.specifications.length - 1 ? "1px solid #f9f9f9" : "none" }}>
-                                <s-stack direction="inline" gap="base" align-items="center" style={{ justifyContent: "space-between" }}>
-                                  <s-text type="strong" variant="bodySm">{spec.name}:</s-text>
-                                  <s-text variant="bodySm">{spec.rawValue}</s-text>
-                                </s-stack>
-                                {spec.value !== null && spec.value !== undefined && spec.value !== spec.rawValue && (
-                                  <div style={{ marginTop: "4px", paddingLeft: "10px" }}>
-                                    <s-badge tone="success" size="base">
-                                      Parsed: {typeof spec.value === 'object' ? JSON.stringify(spec.value) : spec.value} {spec.unit || ""} ({spec.system || "dimension"})
-                                    </s-badge>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <s-paragraph color="subdued">No specifications extracted.</s-paragraph>
-                        )}
-                      </s-stack>
-                    </s-box>
-                  )}
-
-                  {!isExtracting && !extractedProduct && (
-                    <s-box padding="base" background="subdued" borderRadius="base" style={{ marginTop: "8px" }}>
-                      <s-paragraph color="subdued">No extraction data available. Edit the Markdown or re-run parser.</s-paragraph>
-                    </s-box>
-                  )}
-
-                  <s-box padding="base" background="subdued" borderRadius="base" style={{ marginTop: "15px" }}>
-                    <s-paragraph>
-                      Verify and edit the Markdown content on the left to add specs, then click "Re-run Extraction" to re-process.
-                    </s-paragraph>
-                    <s-stack direction="inline" gap="base" style={{ marginTop: "10px" }}>
-                      <s-button 
-                        variant="primary" 
-                        onClick={() => runExtraction(editingMarkdown, selectedSource.domain)}
-                        disabled={isExtracting}
-                      >
-                        Re-run Extraction
-                      </s-button>
-                      <s-button 
-                        variant="primary"
-                        onClick={handleOpenReviewModal}
-                        disabled={!extractedProduct}
-                        style={{ background: "linear-gradient(135deg, #008060 0%, #005e46 100%)", color: "white" }}
-                      >
-                        Review & Publish
-                      </s-button>
-                      <s-button 
-                        onClick={() => shopify.toast.show("Schema Lock: Confirmed format for domain!")}
-                      >
-                        Approve Schema & Lock
-                      </s-button>
-                    </s-stack>
-                  </s-box>
-                </div>
-
+      {/* Stage 3: Publish Queue */}
+      {activeTab === "queue" && (
+        <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "stretch", width: "100%" }}>
+          {/* Left Column: Queue Dashboard & Table */}
+          <div style={{ flex: "1.2", minWidth: "450px" }}>
+            <s-section heading="🗂 Queue & Auto-Publish dashboard">
+              <div style={{
+                background: "#f0f4f9",
+                borderLeft: "4px solid #006fbb",
+                padding: "12px 16px",
+                borderRadius: "0 8px 8px 0",
+                marginBottom: "16px",
+                fontSize: "13px",
+                color: "#202223",
+                lineHeight: "1.5"
+              }}>
+                <strong style={{ display: "block", marginBottom: "4px" }}>💡 Step 3 Publishing Guide:</strong>
+                1. Here is your ingestion queue. Click <strong>View</strong> next to any item in the table to display its parsed details in the preview panel.<br />
+                2. Review the <strong>🤖 AI Schema</strong> to verify title, SKU, and specifications. Go to the <strong>📝 Markdown</strong> tab if you wish to edit the raw extracted text.<br />
+                3. Click <strong>Review & Publish</strong> to adjust collection assignments, check/uncheck fields to overwrite, and create the product in your Shopify store.
               </div>
 
-            </s-stack>
-          )}
-        </s-section>
+              <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "15px", flexWrap: "wrap" }}>
+                <button 
+                  type="button"
+                  onClick={() => setIsProcessingQueue(!isProcessingQueue)}
+                  disabled={!queuedSources.some(s => ["queued", "converting"].includes(s.status)) && !isProcessingQueue}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    borderRadius: "6px",
+                    border: "none",
+                    background: !queuedSources.some(s => ["queued", "converting"].includes(s.status)) && !isProcessingQueue
+                      ? "#e1e3e5"
+                      : isProcessingQueue
+                        ? "linear-gradient(135deg, #d32f2f 0%, #9a0007 100%)"
+                        : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                    color: !queuedSources.some(s => ["queued", "converting"].includes(s.status)) && !isProcessingQueue
+                      ? "#8c9196"
+                      : "white",
+                    cursor: !queuedSources.some(s => ["queued", "converting"].includes(s.status)) && !isProcessingQueue
+                      ? "not-allowed"
+                      : "pointer",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
+                  }}
+                >
+                  {isProcessingQueue ? "Pause Processing" : "Start Processing Queue"}
+                </button>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button 
+                    type="button"
+                    onClick={() => setIsAutoPublishing(!isAutoPublishing)} 
+                    disabled={!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "6px",
+                      border: "none",
+                      background: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                        ? "#e1e3e5"
+                        : isAutoPublishing
+                          ? "linear-gradient(135deg, #d32f2f 0%, #9a0007 100%)"
+                          : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                      color: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                        ? "#8c9196"
+                        : "white",
+                      cursor: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                        ? "not-allowed"
+                        : "pointer",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
+                    }}
+                  >
+                    {isAutoPublishing ? "Pause Auto-Publish" : "Start Auto-Publish"}
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setQueuedSources([])}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      borderRadius: "6px",
+                      border: "1px solid #c9cccf",
+                      background: "white",
+                      color: "#202223",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Clear All
+                  </button>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => {
+                    if (confirm("Clear all queued sources and session data?")) {
+                      setQueuedSources([]);
+                      setCrawlResult(null);
+                      setCustomCollections([]);
+                      setSelectedSourceId(null);
+                      setIsProcessingQueue(false);
+                      localStorage.removeItem("ingest_ai_session");
+                    }
+                  }}
+                  style={{
+                    padding: "8px 16px",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    borderRadius: "6px",
+                    border: "1px solid #c9cccf",
+                    background: "white",
+                    color: "#202223",
+                    cursor: "pointer"
+                  }}
+                >
+                  Clear Session
+                </button>
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 500 }}>Delay (ms):</span>
+                  <input 
+                    type="number" 
+                    value={throttleDelay} 
+                    onChange={(e) => setThrottleDelay(Number(e.target.value))}
+                    min="500" 
+                    step="500"
+                    style={{ width: "80px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ccc", fontSize: "13px" }}
+                  />
+                </div>
+              </div>
+
+              {queuedSources.length === 0 ? (
+                <div style={{ textAlign: "center", background: "#f9fafb", borderRadius: "8px", border: "1px dashed #c9cccf", padding: "24px" }}>
+                  <p style={{ color: "#6d7175", fontSize: "14px", margin: 0 }}>Queue is empty. Go to "Crawl & Categorize" tab to select and queue products.</p>
+                </div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "10px" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid #eee", textAlign: "left" }}>
+                      <th style={{ padding: "8px", fontSize: "13px", fontWeight: 600, color: "#202223" }}>Source Name</th>
+                      <th style={{ padding: "8px", fontSize: "13px", fontWeight: 600, color: "#202223" }}>Type</th>
+                      <th style={{ padding: "8px", fontSize: "13px", fontWeight: 600, color: "#202223" }}>Status</th>
+                      <th style={{ padding: "8px", fontSize: "13px", fontWeight: 600, color: "#202223" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queuedSources.map((source) => (
+                      <tr 
+                        key={source.id} 
+                        style={{ 
+                          borderBottom: "1px solid #eee", 
+                          background: selectedSourceId === source.id ? "#eaf5f0" : "transparent"
+                        }}
+                      >
+                        <td style={{ padding: "8px" }}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedSourceId(source.id)}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "#006fbb",
+                              cursor: "pointer",
+                              padding: 0,
+                              textDecoration: "underline",
+                              fontSize: "13px",
+                              fontWeight: 500,
+                              textAlign: "left"
+                            }}
+                          >
+                            {source.name}
+                          </button>
+                        </td>
+                        <td style={{ padding: "8px", fontSize: "13px", color: "#202223" }}>{source.type.toUpperCase()}</td>
+                        <td style={{ padding: "8px" }}>
+                          <span style={{
+                            fontSize: "13px",
+                            fontWeight: 600,
+                            color: source.status === "ready" ? "#137333" : 
+                                   source.status === "failed" ? "#c5221f" : 
+                                   source.status === "publishing" ? "#b06000" :
+                                   "#5c5f62"
+                          }}>
+                            {source.status.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px" }}>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSourceId(source.id)}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: "12px",
+                                fontWeight: 500,
+                                borderRadius: "4px",
+                                border: "1px solid #c9cccf",
+                                background: "white",
+                                cursor: "pointer"
+                              }}
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSource(source.id)}
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: "12px",
+                                fontWeight: 500,
+                                borderRadius: "4px",
+                                border: "1px solid #f9d2c4",
+                                background: "#fbeae5",
+                                color: "#c5221f",
+                                cursor: "pointer"
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </s-section>
+          </div>
+
+          {/* Right Column: Source Preview Section */}
+          <div style={{ flex: "1", minWidth: "380px" }}>
+            <s-section heading={`📝 Preview: ${selectedSource ? selectedSource.name.replace(/^✓ /, "") : "Select a Source"}`}>
+              <div style={{ padding: "4px" }}>
+                {selectedSource ? (
+                  <div>
+                    {selectedSource.status === "converting" && (
+                      <div style={{ padding: "16px", textAlign: "center" }}>
+                        <s-spinner size="base" accessibility-label="Converting source..."></s-spinner>
+                        <p style={{ marginTop: "10px", color: "#6d7175", fontSize: "13px" }}>Converting to Markdown...</p>
+                      </div>
+                    )}
+
+                    {selectedSource.status === "failed" && (
+                      <div style={{ padding: "16px", background: "#fbeae5", borderRadius: "8px", border: "1px solid #f9d2c4", color: "#202223" }}>
+                        <h4 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: 600, color: "#bf0711" }}>Conversion Failed</h4>
+                        <p style={{ fontSize: "13px", color: "#bf0711", marginBottom: "10px" }}>{selectedSource.error}</p>
+                        <button 
+                          type="button"
+                          onClick={() => triggerUrlIngestion(selectedSource)}
+                          style={{
+                            padding: "6px 12px",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            borderRadius: "4px",
+                            border: "1px solid #c9cccf",
+                            background: "white",
+                            cursor: "pointer"
+                          }}
+                        >
+                          Retry Conversion
+                        </button>
+                      </div>
+                    )}
+
+                    {(selectedSource.status === "ready" || selectedSource.status === "publishing" || selectedSource.name.startsWith("✓")) && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                        
+                        {isMultiProduct && (
+                          <div style={{ padding: "16px", background: "#fffad6", borderRadius: "8px", borderLeft: "4px solid #e0b034", marginBottom: "10px" }}>
+                            <h4 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: 600 }}>⚠️ Multi-Product</h4>
+                            <p style={{ fontSize: "13px", color: "#202223", marginBottom: "8px" }}>
+                              We've focused on the 1st product schema.
+                            </p>
+                            <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                              <button
+                                type="button"
+                                onClick={handleScrapeFirstOnly}
+                                style={{
+                                  padding: "6px 12px",
+                                  fontSize: "12px",
+                                  fontWeight: 600,
+                                  borderRadius: "4px",
+                                  border: "1px solid #c9cccf",
+                                  background: "white",
+                                  cursor: "pointer"
+                                }}
+                              >
+                                Scrape 1st
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSplitMultiProducts}
+                                style={{
+                                  padding: "6px 12px",
+                                  fontSize: "12px",
+                                  fontWeight: 600,
+                                  borderRadius: "4px",
+                                  border: "1px solid #c9cccf",
+                                  background: "white",
+                                  cursor: "pointer"
+                                }}
+                              >
+                                Scrape All
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Sub-tabs for preview panel */}
+                        <div style={{ display: "flex", gap: "5px", borderBottom: "1px solid #e1e3e5", paddingBottom: "0px", marginBottom: "10px" }}>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewSubTab("schema")}
+                            style={{
+                              padding: "6px 12px",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              border: "none",
+                              background: previewSubTab === "schema" ? "white" : "transparent",
+                              color: previewSubTab === "schema" ? "#008060" : "#6d7175",
+                              borderBottom: previewSubTab === "schema" ? "2px solid #008060" : "2px solid transparent",
+                              cursor: "pointer",
+                              transition: "all 0.15s"
+                            }}
+                          >
+                            🤖 AI Schema
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewSubTab("markdown")}
+                            style={{
+                              padding: "6px 12px",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              border: "none",
+                              background: previewSubTab === "markdown" ? "white" : "transparent",
+                              color: previewSubTab === "markdown" ? "#008060" : "#6d7175",
+                              borderBottom: previewSubTab === "markdown" ? "2px solid #008060" : "2px solid transparent",
+                              cursor: "pointer",
+                              transition: "all 0.15s"
+                            }}
+                          >
+                            📝 Markdown
+                          </button>
+                        </div>
+
+                        {/* Sub-tab 1: Markdown Editor */}
+                        {previewSubTab === "markdown" && (
+                          <div>
+                            <textarea
+                              value={editingMarkdown}
+                              onChange={(e) => setEditingMarkdown(e.target.value)}
+                              style={{
+                                width: "100%",
+                                height: "350px",
+                                padding: "10px",
+                                fontFamily: "monospace",
+                                fontSize: "12px",
+                                borderRadius: "6px",
+                                border: "1px solid #ccc",
+                                boxSizing: "border-box",
+                                lineHeight: "1.4",
+                                resize: "vertical",
+                              }}
+                            />
+                            <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                              <button 
+                                type="button"
+                                onClick={() => {
+                                  runExtraction(editingMarkdown, selectedSource.domain);
+                                  setPreviewSubTab("schema");
+                                }}
+                                disabled={isExtracting}
+                                style={{
+                                  width: "100%",
+                                  padding: "8px 16px",
+                                  fontSize: "13px",
+                                  fontWeight: 600,
+                                  borderRadius: "6px",
+                                  border: "none",
+                                  background: isExtracting ? "#e1e3e5" : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                                  color: isExtracting ? "#8c9196" : "white",
+                                  cursor: isExtracting ? "not-allowed" : "pointer"
+                                }}
+                              >
+                                Re-run Extraction
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Sub-tab 2: AI Schema Preview */}
+                        {previewSubTab === "schema" && (
+                          <div>
+                            {/* CTA Action Box placed at the very top of Schema Preview */}
+                            <div style={{ 
+                              padding: "12px", 
+                              background: "#f6f6f7", 
+                              borderRadius: "8px", 
+                              border: "1px solid #e1e3e5", 
+                              marginBottom: "15px" 
+                            }}>
+                              <div style={{ display: "flex", gap: "8px" }}>
+                                <button 
+                                  type="button"
+                                  onClick={() => runExtraction(editingMarkdown, selectedSource.domain)}
+                                  disabled={isExtracting}
+                                  style={{
+                                    padding: "8px 12px",
+                                    fontSize: "12px",
+                                    fontWeight: 600,
+                                    borderRadius: "6px",
+                                    border: "1px solid #c9cccf",
+                                    background: "white",
+                                    color: "#202223",
+                                    cursor: isExtracting ? "not-allowed" : "pointer",
+                                    flex: 1
+                                  }}
+                                >
+                                  Re-run Extraction
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={handleOpenReviewModal}
+                                  disabled={!extractedProduct}
+                                  style={{
+                                    padding: "8px 12px",
+                                    fontSize: "12px",
+                                    fontWeight: 600,
+                                    borderRadius: "6px",
+                                    border: "none",
+                                    background: !extractedProduct ? "#e1e3e5" : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                                    color: !extractedProduct ? "#8c9196" : "white",
+                                    cursor: !extractedProduct ? "not-allowed" : "pointer",
+                                    flex: 1.2
+                                  }}
+                                >
+                                  Review & Publish
+                                </button>
+                              </div>
+                            </div>
+
+                            {isExtracting && (
+                              <div style={{ padding: "16px", textAlign: "center" }}>
+                                <s-spinner size="base" accessibility-label="Extracting fields..."></s-spinner>
+                                <p style={{ marginTop: "10px", color: "#6d7175", fontSize: "13px" }}>Extracting fields...</p>
+                              </div>
+                            )}
+
+                            {!isExtracting && extractedProduct && (
+                              <div style={{ padding: "16px", border: "1px solid #e1e3e5", borderRadius: "8px", background: "white" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <strong style={{ fontSize: "13px" }}>Title:</strong>
+                                    <span style={{ fontSize: "13px", textAlign: "right" }}>{extractedProduct.title}</span>
+                                  </div>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <strong style={{ fontSize: "13px" }}>SKU:</strong>
+                                    <span style={{ fontSize: "13px", textAlign: "right" }}>{extractedProduct.sku}</span>
+                                  </div>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                    <strong style={{ fontSize: "13px" }}>RFQ Mode:</strong>
+                                    <span style={{
+                                      display: "inline-block",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      fontSize: "11px",
+                                      fontWeight: 600,
+                                      background: extractedProduct.purchase_type === "quote_only" ? "#fff0b3" : "#e6f4ea",
+                                      color: extractedProduct.purchase_type === "quote_only" ? "#8f6b00" : "#137333"
+                                    }}>
+                                      {extractedProduct.purchase_type === "quote_only" ? "RFQ" : "DIRECT BUY"}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                    <strong style={{ fontSize: "13px" }}>Description:</strong>
+                                    <p style={{ fontSize: "12px", color: "#5c5f62", lineHeight: "1.4", margin: 0 }}>
+                                      {extractedProduct.short_description}
+                                    </p>
+                                  </div>
+
+                                  <hr style={{ border: "none", borderTop: "1px solid #eee", margin: "8px 0" }} />
+                                  
+                                  <strong style={{ fontSize: "13px" }}>Specs ({extractedProduct.specifications?.length || 0}):</strong>
+                                  {extractedProduct.specifications && extractedProduct.specifications.length > 0 ? (
+                                    <div style={{ border: "1px solid #eee", borderRadius: "4px", padding: "6px", background: "white" }}>
+                                      {extractedProduct.specifications.map((spec: any, idx: number) => (
+                                        <div key={idx} style={{ padding: "4px 0", borderBottom: idx < extractedProduct.specifications.length - 1 ? "1px solid #f9f9f9" : "none" }}>
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                            <strong style={{ fontSize: "12px" }}>{spec.name}:</strong>
+                                            <span style={{ fontSize: "12px", color: "#5c5f62" }}>{spec.rawValue}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p style={{ fontSize: "12px", color: "#6d7175", margin: 0 }}>No specifications.</p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {!isExtracting && !extractedProduct && (
+                              <div style={{ padding: "16px", background: "#f6f6f7", borderRadius: "8px", border: "1px solid #e1e3e5" }}>
+                                <p style={{ fontSize: "13px", color: "#6d7175", margin: 0 }}>No extraction data available. Edit the Markdown or re-run parser.</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                    <div style={{ fontSize: "36px", marginBottom: "10px" }}>📝</div>
+                    <h3 style={{ fontSize: "16px", fontWeight: 600, color: "#1a1a1a", margin: "10px 0 6px 0" }}>No Source Selected</h3>
+                    <p style={{ fontSize: "13px", color: "#6d7175", lineHeight: "1.4", margin: 0 }}>Select a product source from the queue on the left to preview Markdown and verify AI Schema extraction details.</p>
+                  </div>
+                )}
+              </div>
+            </s-section>
+          </div>
+        </div>
       )}
 
       {/* Standard Specifications Footer */}
-      <s-section slot="aside" heading="System Specs & Resources">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">React Router v7</s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link href="https://shopify.dev/docs/api/app-home/using-polaris-components" target="_blank">Polaris Web Components</s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Custom Data: </s-text>
-          <s-link href="https://shopify.dev/docs/apps/build/custom-data" target="_blank">Metafields &amp; Metaobjects</s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Python Service: </s-text>
-          <s-text>Port 5005 (MarkItDown + Flask)</s-text>
-        </s-paragraph>
-      </s-section>
+      {activeTab !== "queue" && (
+        <s-section slot="aside" heading="System Specs & Resources">
+          <s-paragraph>
+            <s-text>Framework: </s-text>
+            <s-link href="https://reactrouter.com/" target="_blank">React Router v7</s-link>
+          </s-paragraph>
+          <s-paragraph>
+            <s-text>Interface: </s-text>
+            <s-link href="https://shopify.dev/docs/api/app-home/using-polaris-components" target="_blank">Polaris Web Components</s-link>
+          </s-paragraph>
+          <s-paragraph>
+            <s-text>Custom Data: </s-text>
+            <s-link href="https://shopify.dev/docs/apps/build/custom-data" target="_blank">Metafields &amp; Metaobjects</s-link>
+          </s-paragraph>
+          <s-paragraph>
+            <s-text>Python Service: </s-text>
+            <s-text>Port 5005 (MarkItDown + Flask)</s-text>
+          </s-paragraph>
+        </s-section>
+      )}
+
 
       {/* Review & Publish Drawer/Modal Overlay */}
       {isReviewOpen && (
@@ -2032,11 +3321,32 @@ export default function Index() {
             }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: "18px", fontWeight: 600, color: "#1a1c1d" }}>
-                  Review &amp; Publish Product
+                  {queuedSources.find(s => s.id === selectedSourceId)?.existingProductId ? "Review & Update Product" : "Review & Publish Product"}
                 </h2>
                 <p style={{ margin: "4px 0 0 0", fontSize: "13px", color: "#6d7175" }}>
                   Configure product details and variant rules before publishing to Shopify.
                 </p>
+                {queuedSources.find(s => s.id === selectedSourceId)?.existingProductId && (
+                  <div style={{ marginTop: "12px", background: "#fff7ed", border: "1px solid #fed7aa", padding: "10px", borderRadius: "6px" }}>
+                    <p style={{ margin: "0 0 8px 0", color: "#9a3412", fontWeight: 600, fontSize: "13px" }}>
+                      ⚠️ Updating Existing Product
+                    </p>
+                    <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", fontSize: "12px", color: "#9a3412" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={reviewOverwriteTitle} onChange={e => setReviewOverwriteTitle(e.target.checked)} />
+                        Overwrite Title
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={reviewOverwriteDescription} onChange={e => setReviewOverwriteDescription(e.target.checked)} />
+                        Overwrite Description
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={reviewOverwriteVariants} onChange={e => setReviewOverwriteVariants(e.target.checked)} />
+                        Overwrite Variants
+                      </label>
+                    </div>
+                  </div>
+                )}
               </div>
               <button 
                 onClick={() => setIsReviewOpen(false)}
@@ -2578,7 +3888,7 @@ export default function Index() {
               >
                 {isPublishing ? (
                   <>
-                    <s-spinner size="small" accessibility-label="Publishing..."></s-spinner>
+                    <s-spinner size="base" accessibility-label="Publishing..."></s-spinner>
                     Publishing...
                   </>
                 ) : (

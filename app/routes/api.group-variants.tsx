@@ -11,6 +11,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const data = await request.json().catch(() => ({}));
     const products = data.products;
+    const collections = data.collections || [];
 
     if (!products || !Array.isArray(products)) {
       return Response.json({ error: "Invalid or missing products array" }, { status: 400 });
@@ -20,7 +21,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const response = await fetch("http://localhost:5005/group-variants", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ products }),
+      body: JSON.stringify({ products, collections }),
     });
 
     if (!response.ok) {
