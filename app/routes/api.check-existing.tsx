@@ -18,7 +18,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     let hasNextPage = true;
     let endCursor: string | null = null;
-    const existingProducts: Record<string, { id: string; title: string; updatedAt: string }> = {};
+    const existingProducts: Record<string, { id: string; title: string; updatedAt: string; description: string; variants: any[] }> = {};
 
     const query = `
       query getImportedProducts($cursor: String) {
@@ -30,9 +30,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           nodes {
             id
             title
+            description
             updatedAt
             originUrlMetafield: metafield(namespace: "$app", key: "origin_url") {
               value
+            }
+            variants(first: 100) {
+              nodes {
+                id
+                title
+                sku
+                price
+              }
             }
           }
         }
@@ -55,6 +64,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             id: product.id,
             title: product.title,
             updatedAt: product.updatedAt,
+            description: product.description || "",
+            variants: (product.variants?.nodes || []).map((v: any) => ({
+              id: v.id,
+              title: v.title,
+              sku: v.sku || "",
+              price: v.price || "0.00",
+            })),
           };
         }
       }

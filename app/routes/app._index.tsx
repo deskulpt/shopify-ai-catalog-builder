@@ -205,6 +205,7 @@ export default function Index() {
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const [throttleDelay, setThrottleDelay] = useState(3000);
 
+  const [existingProductsMap, setExistingProductsMap] = useState<Record<string, { id: string; title: string; updatedAt: string; description: string; variants: any[] }>>({});
   const [queuedSources, setQueuedSources] = useState<QueuedSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState("");
@@ -227,6 +228,7 @@ export default function Index() {
   const [editingMarkdown, setEditingMarkdown] = useState("");
 
   const selectedSource = queuedSources.find(s => s.id === selectedSourceId);
+  const existingProduct = selectedSource ? existingProductsMap[selectedSource.name] : undefined;
 
   // Detect if selected source likely contains multiple products and trigger extraction
   useEffect(() => {
@@ -428,7 +430,6 @@ export default function Index() {
   const [activeTab, setActiveTab] = useState<"ingest" | "crawl" | "queue">("ingest");
   const [previewSubTab, setPreviewSubTab] = useState<"markdown" | "schema">("schema");
   
-  const [existingProductsMap, setExistingProductsMap] = useState<Record<string, { id: string; title: string; updatedAt: string }>>({});
   const [globalOverwriteTitle, setGlobalOverwriteTitle] = useState(true);
   const [globalOverwriteDescription, setGlobalOverwriteDescription] = useState(true);
   const [globalOverwriteVariants, setGlobalOverwriteVariants] = useState(true);
@@ -930,6 +931,7 @@ export default function Index() {
     selected: boolean;
   }[]>([]);
   const [reviewMediaLinks, setReviewMediaLinks] = useState<{ url: string; alt: string; selected: boolean }[]>([]);
+  const [reviewHeroImageIdx, setReviewHeroImageIdx] = useState<number>(0);
   const [reviewFileLinks, setReviewFileLinks] = useState<{ url: string; text: string; selected: boolean; embed?: boolean }[]>([]);
   const [reviewCurrency, setReviewCurrency] = useState("USD");
   const [reviewPriceUnit, setReviewPriceUnit] = useState("");
@@ -1231,6 +1233,7 @@ export default function Index() {
       selected: true,
     }));
     setReviewMediaLinks(media);
+    setReviewHeroImageIdx(0);
 
     const files = (extractedProduct.file_links || []).map((f: any) => ({
       url: f.url,
@@ -1340,6 +1343,13 @@ export default function Index() {
   const handlePublish = async () => {
     setIsPublishing(true);
     try {
+      const sortedMedia = [...reviewMediaLinks];
+      if (reviewHeroImageIdx >= 0 && reviewHeroImageIdx < sortedMedia.length) {
+        const hero = sortedMedia[reviewHeroImageIdx];
+        sortedMedia.splice(reviewHeroImageIdx, 1);
+        sortedMedia.unshift(hero);
+      }
+
       const payload = {
         title: reviewTitle,
         descriptionHtml: markdownToDescriptionHtml(reviewDescription),
@@ -1351,7 +1361,7 @@ export default function Index() {
         specifications: reviewSpecs.filter(s => s.selected).map(s => ({ name: s.name, value: s.value })),
         variants: reviewVariants.filter(v => v.selected),
         options: reviewOptions,
-        media_links: reviewMediaLinks.filter(m => m.selected).map(m => ({ url: m.url, alt: m.alt })),
+        media_links: sortedMedia.filter(m => m.selected).map(m => ({ url: m.url, alt: m.alt })),
         file_links: reviewFileLinks.filter(f => f.selected).map(f => ({ url: f.url, text: f.text, embed: f.embed })),
         
         existingProductId: queuedSources.find(s => s.id === selectedSourceId)?.existingProductId,
@@ -3680,15 +3690,112 @@ export default function Index() {
 
                                   <hr style={{ border: "none", borderTop: "1px solid #eee", margin: "8px 0" }} />
                                   
-                                  <strong style={{ fontSize: "13px" }}>Specs ({extractedProduct.specifications?.length || 0}):</strong>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                    <strong style={{ fontSize: "13px" }}>Specs ({extractedProduct.specifications?.length || 0}):</strong>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const newSpecs = [...(extractedProduct.specifications || []), { name: "New Property", rawValue: "Value" }];
+                                        setExtractedProduct({ ...extractedProduct, specifications: newSpecs });
+                                      }}
+                                      style={{
+                                        border: "none",
+                                        background: "transparent",
+                                        color: "#008060",
+                                        cursor: "pointer",
+                                        fontSize: "12px",
+                                        fontWeight: 600,
+                                        padding: 0
+                                      }}
+                                    >
+                                      ＋ Add Row
+                                    </button>
+                                  </div>
                                   {extractedProduct.specifications && extractedProduct.specifications.length > 0 ? (
-                                    <div style={{ border: "1px solid #eee", borderRadius: "4px", padding: "6px", background: "white" }}>
+                                    <div style={{ border: "1px solid #e1e3e5", borderRadius: "8px", overflow: "hidden", background: "white" }}>
                                       {extractedProduct.specifications.map((spec: any, idx: number) => (
-                                        <div key={idx} style={{ padding: "4px 0", borderBottom: idx < extractedProduct.specifications.length - 1 ? "1px solid #f9f9f9" : "none" }}>
-                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                            <strong style={{ fontSize: "12px" }}>{spec.name}:</strong>
-                                            <span style={{ fontSize: "12px", color: "#5c5f62" }}>{spec.rawValue}</span>
-                                          </div>
+                                        <div key={idx} style={{ 
+                                          display: "flex", 
+                                          alignItems: "center", 
+                                          gap: "8px", 
+                                          padding: "6px 10px", 
+                                          borderBottom: idx < extractedProduct.specifications.length - 1 ? "1px solid #f1f2f4" : "none" 
+                                        }}>
+                                          <input
+                                            type="text"
+                                            value={spec.name}
+                                            onChange={(e) => {
+                                              const newSpecs = [...extractedProduct.specifications];
+                                              newSpecs[idx] = { ...newSpecs[idx], name: e.target.value };
+                                              setExtractedProduct({ ...extractedProduct, specifications: newSpecs });
+                                            }}
+                                            style={{
+                                              flex: 1,
+                                              fontSize: "12px",
+                                              fontWeight: 600,
+                                              border: "1px solid transparent",
+                                              borderRadius: "4px",
+                                              padding: "2px 4px",
+                                              background: "transparent",
+                                              outline: "none"
+                                            }}
+                                            onFocus={(e) => {
+                                              e.target.style.border = "1px solid #008060";
+                                              e.target.style.background = "white";
+                                            }}
+                                            onBlur={(e) => {
+                                              e.target.style.border = "1px solid transparent";
+                                              e.target.style.background = "transparent";
+                                            }}
+                                          />
+                                          <span style={{ color: "#6d7175" }}>:</span>
+                                          <input
+                                            type="text"
+                                            value={spec.rawValue}
+                                            onChange={(e) => {
+                                              const newSpecs = [...extractedProduct.specifications];
+                                              newSpecs[idx] = { ...newSpecs[idx], rawValue: e.target.value };
+                                              setExtractedProduct({ ...extractedProduct, specifications: newSpecs });
+                                            }}
+                                            style={{
+                                              flex: 1.5,
+                                              fontSize: "12px",
+                                              color: "#4b5563",
+                                              border: "1px solid transparent",
+                                              borderRadius: "4px",
+                                              padding: "2px 4px",
+                                              background: "transparent",
+                                              outline: "none"
+                                            }}
+                                            onFocus={(e) => {
+                                              e.target.style.border = "1px solid #008060";
+                                              e.target.style.background = "white";
+                                            }}
+                                            onBlur={(e) => {
+                                              e.target.style.border = "1px solid transparent";
+                                              e.target.style.background = "transparent";
+                                            }}
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const newSpecs = extractedProduct.specifications.filter((_: any, sIdx: number) => sIdx !== idx);
+                                              setExtractedProduct({ ...extractedProduct, specifications: newSpecs });
+                                            }}
+                                            style={{
+                                              border: "none",
+                                              background: "transparent",
+                                              color: "#c5221f",
+                                              cursor: "pointer",
+                                              fontSize: "14px",
+                                              padding: "2px 6px",
+                                              display: "flex",
+                                              alignItems: "center"
+                                            }}
+                                            title="Delete specification"
+                                          >
+                                            ×
+                                          </button>
                                         </div>
                                       ))}
                                     </div>
@@ -3854,25 +3961,18 @@ export default function Index() {
                   Configure product details and variant rules before publishing to Shopify.
                 </p>
                 {queuedSources.find(s => s.id === selectedSourceId)?.existingProductId && (
-                  <div style={{ marginTop: "12px", background: "#fff7ed", border: "1px solid #fed7aa", padding: "10px", borderRadius: "6px" }}>
-                    <p style={{ margin: "0 0 8px 0", color: "#9a3412", fontWeight: 600, fontSize: "13px" }}>
-                      ⚠️ Updating Existing Product
-                    </p>
-                    <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", fontSize: "12px", color: "#9a3412" }}>
-                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-                        <input type="checkbox" checked={reviewOverwriteTitle} onChange={e => setReviewOverwriteTitle(e.target.checked)} />
-                        Overwrite Title
-                      </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-                        <input type="checkbox" checked={reviewOverwriteDescription} onChange={e => setReviewOverwriteDescription(e.target.checked)} />
-                        Overwrite Description
-                      </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-                        <input type="checkbox" checked={reviewOverwriteVariants} onChange={e => setReviewOverwriteVariants(e.target.checked)} />
-                        Overwrite Variants
-                      </label>
-                    </div>
-                  </div>
+                  <span style={{ 
+                    display: "inline-block",
+                    marginTop: "6px",
+                    background: "#fee2e2",
+                    color: "#991b1b",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    fontWeight: 600
+                  }}>
+                    ⚠️ Update Mode Active
+                  </span>
                 )}
               </div>
               <button 
@@ -3900,6 +4000,88 @@ export default function Index() {
               flexDirection: "column",
               gap: "24px",
             }}>
+              {selectedSource?.existingProductId && existingProduct && (
+                <div style={{
+                  background: "#fdf8f6",
+                  border: "1px solid #fadcd3",
+                  borderRadius: "10px",
+                  padding: "16px",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.03)"
+                }}>
+                  <h4 style={{ margin: "0 0 12px 0", color: "#c5221f", fontWeight: 700, fontSize: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>⚠️</span> Side-by-Side Update Comparison &amp; Overwrite Rules
+                  </h4>
+                  
+                  <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                    {/* Title Comparison */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "12px", fontWeight: 600, color: "#6d7175" }}>Product Title</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "12px", color: "#c5221f", fontWeight: 600, cursor: "pointer" }}>
+                          <input type="checkbox" checked={reviewOverwriteTitle} onChange={e => setReviewOverwriteTitle(e.target.checked)} />
+                          Overwrite?
+                        </label>
+                      </div>
+                      <div style={{ display: "flex", gap: "10px" }}>
+                        <div style={{ flex: 1, padding: "8px 10px", background: "#f1f2f4", border: "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: "#5c5f62" }}>
+                          <strong>Shopify:</strong> {existingProduct.title}
+                        </div>
+                        <div style={{ flex: 1, padding: "8px 10px", background: reviewOverwriteTitle ? "#e6f4ea" : "#f1f2f4", border: reviewOverwriteTitle ? "1px solid #c4ebd0" : "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: reviewOverwriteTitle ? "#137333" : "#5c5f62" }}>
+                          <strong>AI Extracted:</strong> {reviewTitle}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Description Comparison */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "12px", fontWeight: 600, color: "#6d7175" }}>Description Summary</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "12px", color: "#c5221f", fontWeight: 600, cursor: "pointer" }}>
+                          <input type="checkbox" checked={reviewOverwriteDescription} onChange={e => setReviewOverwriteDescription(e.target.checked)} />
+                          Overwrite?
+                        </label>
+                      </div>
+                      <div style={{ display: "flex", gap: "10px" }}>
+                        <div style={{ flex: 1, padding: "8px 10px", background: "#f1f2f4", border: "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: "#5c5f62", maxHeight: "80px", overflowY: "auto" }}>
+                          <strong>Shopify:</strong> {existingProduct.description || "(No description)"}
+                        </div>
+                        <div style={{ flex: 1, padding: "8px 10px", background: reviewOverwriteDescription ? "#e6f4ea" : "#f1f2f4", border: reviewOverwriteDescription ? "1px solid #c4ebd0" : "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: reviewOverwriteDescription ? "#137333" : "#5c5f62", maxHeight: "80px", overflowY: "auto" }}>
+                          <strong>AI Extracted:</strong> {reviewDescription}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Variants Comparison */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "12px", fontWeight: 600, color: "#6d7175" }}>Variants &amp; SKU Mapping</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "12px", color: "#c5221f", fontWeight: 600, cursor: "pointer" }}>
+                          <input type="checkbox" checked={reviewOverwriteVariants} onChange={e => setReviewOverwriteVariants(e.target.checked)} />
+                          Overwrite?
+                        </label>
+                      </div>
+                      <div style={{ display: "flex", gap: "10px" }}>
+                        <div style={{ flex: 1, padding: "8px 10px", background: "#f1f2f4", border: "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: "#5c5f62" }}>
+                          <strong>Shopify ({existingProduct.variants?.length || 0}):</strong>
+                          <div style={{ fontSize: "11px", marginTop: "4px", color: "#6d7175" }}>
+                            {existingProduct.variants && existingProduct.variants.slice(0, 3).map((v: any) => `${v.title} (${v.sku || "no SKU"})`).join(", ")}
+                            {existingProduct.variants && existingProduct.variants.length > 3 && " ..."}
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, padding: "8px 10px", background: reviewOverwriteVariants ? "#e6f4ea" : "#f1f2f4", border: reviewOverwriteVariants ? "1px solid #c4ebd0" : "1px solid #c9cccf", borderRadius: "6px", fontSize: "12px", color: reviewOverwriteVariants ? "#137333" : "#5c5f62" }}>
+                          <strong>AI Extracted ({reviewVariants.length || (reviewSku ? 1 : 0)}):</strong>
+                          <div style={{ fontSize: "11px", marginTop: "4px", color: reviewOverwriteVariants ? "#137333" : "#6d7175" }}>
+                            {reviewVariants.length > 0 
+                              ? reviewVariants.slice(0, 3).map((v: any) => `${v.optionValues.map((ov: any) => ov.name).join("/")} (${v.sku || "no SKU"})`).join(", ")
+                              : `${reviewTitle} (${reviewSku || "no SKU"})`}
+                            {reviewVariants.length > 3 && " ..."}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               
               {/* Part 1: Basic Info */}
               <div>
@@ -4134,23 +4316,66 @@ export default function Index() {
                             key={idx} 
                             style={{ 
                               position: "relative", 
-                              border: "1px solid #e1e3e5", 
+                              border: reviewHeroImageIdx === idx ? "2px solid #e0b034" : "1px solid #e1e3e5", 
                               borderRadius: "6px", 
                               padding: "4px", 
                               display: "flex", 
                               flexDirection: "column", 
                               alignItems: "center", 
-                              backgroundColor: media.selected ? "#f0fdf4" : "#ffffff", 
-                              borderColor: media.selected ? "#008060" : "#e1e3e5",
+                              backgroundColor: media.selected 
+                                ? (reviewHeroImageIdx === idx ? "#fefbeb" : "#f0fdf4") 
+                                : "#ffffff", 
+                              borderColor: media.selected 
+                                ? (reviewHeroImageIdx === idx ? "#e0b034" : "#008060") 
+                                : "#e1e3e5",
+                              boxShadow: reviewHeroImageIdx === idx ? "0 0 8px rgba(224, 176, 52, 0.2)" : "none",
                               transition: "all 0.2s" 
                             }}
                           >
                             <input 
                               type="checkbox" 
                               checked={media.selected} 
-                              onChange={(e) => setReviewMediaLinks(prev => prev.map((m, i) => i === idx ? { ...m, selected: e.target.checked } : m))}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setReviewMediaLinks(prev => prev.map((m, i) => i === idx ? { ...m, selected: checked } : m));
+                                if (!checked && reviewHeroImageIdx === idx) {
+                                  // Find first other checked image or default to 0
+                                  const firstCheckedIdx = reviewMediaLinks.findIndex((m, i) => m.selected && i !== idx);
+                                  setReviewHeroImageIdx(firstCheckedIdx >= 0 ? firstCheckedIdx : 0);
+                                }
+                              }}
                               style={{ position: "absolute", top: "4px", left: "4px", cursor: "pointer", width: "16px", height: "16px", zIndex: 2 }}
                             />
+
+                            {/* Hero Selector Button */}
+                            {media.selected && (
+                              <button
+                                type="button"
+                                onClick={() => setReviewHeroImageIdx(idx)}
+                                style={{
+                                  position: "absolute",
+                                  top: "4px",
+                                  right: "4px",
+                                  cursor: "pointer",
+                                  border: "none",
+                                  background: reviewHeroImageIdx === idx ? "#e0b034" : "rgba(0,0,0,0.4)",
+                                  color: "white",
+                                  borderRadius: "4px",
+                                  padding: "2px 6px",
+                                  fontSize: "9px",
+                                  fontWeight: "bold",
+                                  zIndex: 2,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "2px",
+                                  boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+                                  transition: "all 0.15s ease"
+                                }}
+                              >
+                                {reviewHeroImageIdx === idx ? "★ Hero" : "☆ Make Hero"}
+                              </button>
+                            )}
+
                             <div style={{ width: "100%", height: "80px", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginBottom: "4px" }}>
                               <img src={media.url} alt={media.alt || "Product image"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
                             </div>
