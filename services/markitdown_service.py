@@ -1654,8 +1654,8 @@ def _derive_parent_title(cluster: list) -> str:
         r'^(\d+|[0-9]+[a-z]{0,4}|ac|dc|v|a|hz|kw|hp|mm|cm|m|inch|red|blue|black|white|gray|grey|ip\d+|npt|bsp|pn|ss|ms|pvc|brass|steel|iron|copper|plastic|standard|single|double|triple|phase)$',
         re.IGNORECASE
     )
-    while lcp and _SPEC_SUFFIX.match(lcp[-1]):
-        lcp.pop()
+    # while lcp and _SPEC_SUFFIX.match(lcp[-1]):
+    #     lcp.pop()
 
     if len(lcp) < 2:
         # Fallback: use first product's name, strip trailing numeric/spec suffix
