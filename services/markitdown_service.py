@@ -1300,9 +1300,9 @@ def rule_based_extract(markdown, url=None, domain=None):
         stripped = line.strip()
         if stripped and not stripped.startswith('#') and not stripped.startswith('|') and not stripped.startswith('-') and not stripped.startswith('*') and not stripped.startswith('!['):
             desc_lines.append(stripped)
-            if len(desc_lines) >= 3:
-                break
-    short_description = " ".join(desc_lines)[:500]
+    
+    # Use the full cleaned markdown or the extracted paragraphs
+    short_description = cleaned_markdown if cleaned_markdown else " ".join(desc_lines)
     if not short_description:
         short_description = f"Industrial specifications sheet for {title}."
 
@@ -1470,7 +1470,8 @@ def extract_product():
                 "currency": "Standard currency code (e.g. USD, INR, GBP, CAD, EUR) or null",
                 "price_unit": "The unit corresponding to the price (e.g. Piece, Meter, Kg) or null",
                 "purchase_type": "direct_buy" or "quote_only",
-                "short_description": "A 2-3 sentence overview description",
+                "vendor": "Manufacturer name, brand, or null if not found",
+                "short_description": "The full product description in Markdown format, but EXCLUDING any manufacturer contact details, emails, phones, or brand promotional boilerplate.",
                 "specifications": [
                     {{
                         "name": "Specification Name (e.g. Weight, Voltage, Material)",
@@ -1507,6 +1508,7 @@ def extract_product():
             result["price"] = result.get("price") or "0.00"
             result["currency"] = result.get("currency") or "USD"
             result["price_unit"] = result.get("price_unit") or None
+            result["vendor"] = result.get("vendor") or None
             
             specs_normalized = []
             for spec in result.get("specifications", []):
@@ -1543,7 +1545,11 @@ def extract_product():
 
     if not result:
         result = rule_based_extract(markdown, url=url, domain=domain)
-        
+
+    enrich_product_with_pdf_links(result, url, domain)
+    result["success"] = True
+    return jsonify(result)
+
   # ─── Variant Grouping Helpers ─────────────────────────────────────────────────
 
 # Stopwords to ignore when comparing product names
@@ -1601,7 +1607,7 @@ def _name_similarity(n1: str, n2: str) -> float:
     sku2 = _sku_prefix(n2)
     sku_bonus = 1.0 if (sku1 and sku2 and sku1 == sku2) else 0.0
 
-    return 0.50 * jaccard + 0.30 * lcp_ratio + 0.20 * sku_bonus
+    return round(0.50 * jaccard + 0.30 * lcp_ratio + 0.20 * sku_bonus, 6)
 
 def _cluster_similarity(name: str, cluster: list) -> float:
     """Average similarity of `name` against every product already in the cluster."""
@@ -1648,8 +1654,8 @@ def _derive_parent_title(cluster: list) -> str:
         r'^(\d+|[0-9]+[a-z]{0,4}|ac|dc|v|a|hz|kw|hp|mm|cm|m|inch|red|blue|black|white|gray|grey|ip\d+|npt|bsp|pn|ss|ms|pvc|brass|steel|iron|copper|plastic|standard|single|double|triple|phase)$',
         re.IGNORECASE
     )
-    while lcp and _SPEC_SUFFIX.match(lcp[-1]):
-        lcp.pop()
+    # while lcp and _SPEC_SUFFIX.match(lcp[-1]):
+    #     lcp.pop()
 
     if len(lcp) < 2:
         # Fallback: use first product's name, strip trailing numeric/spec suffix
@@ -1838,11 +1844,9 @@ def group_variants():
 
         for prod in cluster:
             options_dict = infer_variant_options(parent_title, prod['name'])
-            variants_list.append({
-                'name': prod['name'],
-                'url': prod['url'],
-                'option_values': options_dict
-            })
+            var_item = prod.copy()
+            var_item['option_values'] = options_dict
+            variants_list.append(var_item)
             for k in options_dict:
                 if k not in all_option_names:
                     all_option_names.append(k)
