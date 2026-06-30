@@ -456,6 +456,34 @@ def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
             
     return 'unknown'
 
+def matches_category_segments(cat_url, prod_url):
+    cat_path = urllib.parse.urlparse(cat_url).path.lower()
+    prod_path = urllib.parse.urlparse(prod_url).path.lower()
+    
+    # Strip common base prefixes (matching full segments)
+    for prefix in ['/product-category', '/category', '/collections', '/catalog']:
+        if cat_path.startswith(prefix + '/'):
+            cat_path = cat_path[len(prefix):]
+        elif cat_path == prefix:
+            cat_path = ""
+            
+    for prefix in ['/product', '/products', '/item']:
+        if prod_path.startswith(prefix + '/'):
+            prod_path = prod_path[len(prefix):]
+        elif prod_path == prefix:
+            prod_path = ""
+            
+    cat_segs = [s for s in cat_path.split('/') if s]
+    prod_segs = [s for s in prod_path.split('/') if s]
+    
+    if not cat_segs or not prod_segs:
+        return False
+        
+    # Check if cat_segs is a prefix of prod_segs
+    if len(cat_segs) > len(prod_segs):
+        return False
+    return prod_segs[:len(cat_segs)] == cat_segs
+
 def preprocess_html_content(html_bytes):
     try:
         soup = BeautifulSoup(html_bytes, "html.parser")
@@ -746,9 +774,14 @@ def crawl_site():
                                 continue
                             elif classification == 'category':
                                 if not any(cat["url"] == l for cat in discovered_categories):
-                                    discovered_categories.append({"name": name, "url": l, "products": []})
+                                    name_parts = [p for p in path_parts if p.lower() not in ['product-category', 'category', 'collections', 'collection', 'catalog', 'department']]
+                                    cat_name = name
+                                    if name_parts:
+                                        cat_name = " > ".join([part.replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title() for part in name_parts])
+                                    
+                                    discovered_categories.append({"name": cat_name, "url": l, "products": []})
                                     if category_logged_count < 10:
-                                        log_event(f"[Crawler] Classified sitemap URL as Category: {l} ({name})")
+                                        log_event(f"[Crawler] Classified sitemap URL as Category: {l} ({cat_name})")
                                         category_logged_count += 1
                                     elif category_logged_count == 10:
                                         log_event("[Crawler] Discovered additional sitemap categories...")
@@ -826,9 +859,16 @@ def crawl_site():
                             continue
                         elif classification == 'category':
                             if not any(cat["url"] == full_href for cat in discovered_categories):
-                                discovered_categories.append({"name": text, "url": full_href, "products": []})
+                                parsed_fh = urllib.parse.urlparse(full_href)
+                                path_parts = [p for p in parsed_fh.path.split('/') if p]
+                                name_parts = [p for p in path_parts if p.lower() not in ['product-category', 'category', 'collections', 'collection', 'catalog', 'department']]
+                                cat_name = text
+                                if name_parts and len(name_parts) > 1:
+                                    cat_name = " > ".join([part.replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title() for part in name_parts])
+                                
+                                discovered_categories.append({"name": cat_name, "url": full_href, "products": []})
                                 if category_logged_count < 5:
-                                    log_event(f"[Crawler] Classified homepage link as Category: {full_href} ({text})")
+                                    log_event(f"[Crawler] Classified homepage link as Category: {full_href} ({cat_name})")
                                     category_logged_count += 1
                         elif classification == 'product':
                             if not any(p["url"] == full_href for p in discovered_products):
@@ -896,11 +936,20 @@ def crawl_site():
             discovered_categories.append({"name": "General Products", "url": url, "products": []})
             
         log_event("[Grouping] Organizing discovered products into categories...")
+        # Sort categories by segment length descending to match most specific sub-collections first
+        def get_category_segment_length(cat):
+            cat_path = urllib.parse.urlparse(cat["url"]).path.lower()
+            for prefix in ['/product-category', '/category', '/collections', '/catalog']:
+                if cat_path.startswith(prefix):
+                    cat_path = cat_path[len(prefix):]
+            return len([s for s in cat_path.split('/') if s])
+
+        sorted_categories = sorted(discovered_categories, key=get_category_segment_length, reverse=True)
+
         for p in discovered_products:
             assigned = False
-            for cat in discovered_categories:
-                cat_path = urllib.parse.urlparse(cat["url"]).path.rstrip('/')
-                if cat_path and cat_path in urllib.parse.urlparse(p["url"]).path:
+            for cat in sorted_categories:
+                if matches_category_segments(cat["url"], p["url"]):
                     if not any(x["url"] == p["url"] for x in cat["products"]):
                         cat["products"].append(p)
                     assigned = True

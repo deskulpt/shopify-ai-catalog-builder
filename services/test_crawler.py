@@ -337,9 +337,39 @@ def test_classify_url():
     
     print("Local URL classification tests passed successfully!")
 
+def test_matches_category_segments():
+    from markitdown_service import matches_category_segments
+    
+    # Simple match
+    assert matches_category_segments(
+        "https://www.sensationnel.com/product-category/weave/weaves-human-hair/",
+        "https://www.sensationnel.com/product/weave/weaves-human-hair/some-product/"
+    ) is True
+    
+    # Different prefixes, same relative path segments
+    assert matches_category_segments(
+        "https://www.sensationnel.com/collections/hair/braids/",
+        "https://www.sensationnel.com/products/hair/braids/item-123"
+    ) is True
+    
+    # Non-matching paths
+    assert matches_category_segments(
+        "https://www.sensationnel.com/product-category/wig/",
+        "https://www.sensationnel.com/product/weave/some-item/"
+    ) is False
+    
+    # Parent vs child matching specificity
+    assert matches_category_segments(
+        "https://www.sensationnel.com/product-category/weave/",
+        "https://www.sensationnel.com/product/weave/weaves-human-hair/some-product/"
+    ) is True
+    
+    print("Local matches_category_segments unit tests passed successfully!")
+
 if __name__ == "__main__":
     print("Running crawler and extraction tests...")
     test_classify_url()
+    test_matches_category_segments()
     test_crawl_mock()
     test_crawl_real_failed_fallback()
     test_extract()
