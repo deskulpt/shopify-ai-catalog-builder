@@ -9,7 +9,7 @@ Automate and normalize product data ingestion from diverse formats (files, URLs,
 - [x] **Phase 1: Hello World & Service Architecture** - Scaffold React Router + Node app and Python microservice. (completed 2026-06-07)
 - [x] **Phase 2: Ingestion & Conversion** - Accept files/URLs, discover vendor site categories/products, and select target content. (completed 2026-06-08)
 - [x] **Phase 3: AI Extraction & Mapping** - Run LLM on Markdown, normalize units, group variants, and detect purchase type. (completed 2026-06-08)
-- [ ] **Phase 4: Review UI & Shopify Integration** - Review drafts, map metafields, and publish to Shopify.
+- [x] **Phase 4: Review UI & Shopify Integration** - Review drafts, map metafields, and publish to Shopify. (completed 2026-06-30)
 
 ## Phase Details
 
@@ -79,7 +79,7 @@ Plans:
 
 Plans:
 
-- [ ] 04-01: Polaris draft review UI and Shopify GraphQL publishing
+- [x] 04-01: Polaris draft review UI and Shopify GraphQL publishing
 
 ## Progress
 
@@ -88,4 +88,4 @@ Plans:
 | 1. Hello World & Service Architecture | 1/1 | Complete    | 2026-06-07 |
 | 2. Ingestion & Conversion | 2/2 | Complete    | 2026-06-08 |
 | 3. AI Extraction & Mapping | 2/2 | Complete    | 2026-06-08 |
-| 4. Review UI & Shopify Integration | 0/1 | Not started | - |
+| 4. Review UI & Shopify Integration | 1/1 | Complete    | 2026-06-30 |

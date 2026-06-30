@@ -14,22 +14,22 @@ Automate and normalize product data ingestion from diverse formats into structur
 
 <!-- Shipped and confirmed valuable. -->
 
-(None yet — ship to validate)
+- [x] Support URL and file upload ingestion (PDF, DOC/DOCX, HTML).
+- [x] Convert source inputs to Markdown via Python MarkItDown microservice.
+- [x] Perform logical/AI website crawl and structure discovery (sitemaps, robots.txt, llms.txt, schema.org tags).
+- [x] Provide a category/product selection tree UI in the Polaris app interface.
+- [x] Extract product name, SKU, UPC, images, descriptions, and specs with LLM.
+- [x] Detect and flag purchase type (direct buy vs. quote-only basis).
+- [x] Normalize units (e.g. `25KG` -> `value: 25, unit: KG, system: metric`).
+- [x] Intelligently cluster and map product variants if SKU, name, or series patterns match.
+- [x] Implement embedded Shopify App shell (React Router + Polaris).
+- [x] Provide review UI with completeness scoring, collection suggestions, and metafield mappings.
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Support URL and file upload ingestion (PDF, DOC/DOCX, HTML).
-- [ ] Convert source inputs to Markdown via Python MarkItDown microservice.
-- [ ] Perform logical/AI website crawl and structure discovery (sitemaps, robots.txt, llms.txt, schema.org tags).
-- [ ] Provide a category/product selection tree UI in the Polaris app interface.
-- [ ] Extract product name, SKU, UPC, images, descriptions, and specs with LLM.
-- [ ] Detect and flag purchase type (direct buy vs. quote-only basis).
-- [ ] Normalize units (e.g. `25KG` -> `value: 25, unit: KG, system: metric`).
-- [ ] Intelligently cluster and map product variants if SKU, name, or series patterns match.
-- [ ] Implement embedded Shopify App shell (React Router + Polaris).
-- [ ] Provide review UI with completeness scoring, collection suggestions, and metafield mappings.
+*(None active — all milestone requirements shipped)*
 
 ### Out of Scope
 
