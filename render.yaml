@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: product-ingest-ai-python
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python services/markitdown_service.py
+    envVars:
+      - key: PORT
+        value: 5005
+
+  - type: web
+    name: product-ingest-ai-node
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run setup && npm start
+    envVars:
+      - key: SHOPIFY_API_KEY
+        value: a30d29fc96a831fbbc8c71dcddd47472
+      - key: SHOPIFY_API_SECRET
+        value: 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
+      - key: SCOPES
+        value: write_metaobject_definitions,write_metaobjects,write_products
+      - key: SHOPIFY_APP_URL
+        sync: false
+      - key: MARKITDOWN_SERVICE_URL
+        sync: false
+      - key: NODE_ENV
+        value: production
