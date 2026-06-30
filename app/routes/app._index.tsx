@@ -2365,6 +2365,57 @@ export default function Index() {
                           }}
                         />
                       </div>
+                      
+                      {/* Website Platform Quick Reference Guide */}
+                      <details style={{ marginTop: "10px", background: "#f6f6f7", padding: "12px", borderRadius: "6px", border: "1px solid #e1e3e5" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "13px", color: "#008060", fontWeight: 500, outline: "none", userSelect: "none" }}>
+                          💡 Website Platform Quick Reference Guide (Slug Identification)
+                        </summary>
+                        <div style={{ marginTop: "10px", overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", textAlign: "left" }}>
+                            <thead>
+                              <tr style={{ borderBottom: "2px solid #e1e3e5", color: "#202223" }}>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Platform</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Pattern Type</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Category Marker</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Product Marker</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Note for Scraper Agent</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {[
+                                { name: "Shopify", type: "Fixed", cat: "/collections/", prod: "/products/", note: "Standardized. Highly predictable." },
+                                { name: "WooCommerce", type: "CMS", cat: "/product-category/", prod: "/product/", note: "Paths often customizable via SEO plugins." },
+                                { name: "Magento 2", type: "Flexible", cat: "/category/", prod: "/product/", note: "Heavy use of rewrites. Watch for query params." },
+                                { name: "BigCommerce", type: "Fixed", cat: "/categories/", prod: "/products/", note: "Very similar to Shopify, slightly different slugs." },
+                                { name: "PrestaShop", type: "Short", cat: "/c/", prod: "/p/", note: "Compact paths; watch for ID-based URL appending." },
+                                { name: "Squarespace", type: "CMS", cat: "/category/", prod: "/p/", note: "Often uses /shop/ or /p/ as a base." },
+                                { name: "Wix", type: "Hybrid", cat: "/category/", prod: "/product-page/", note: "Unique dynamic rendering; requires JS wait." },
+                                { name: "OpenCart", type: "Legacy", cat: "/category/", prod: "/product/", note: "Often retains query string fallbacks." },
+                                { name: "Volusion", type: "Fixed", cat: "/c/", prod: "/product/", note: "Rigid; limited slug customization." },
+                                { name: "Zen Cart", type: "Query", cat: "?cPath=", prod: "?products_id=", note: "Non-RESTful. Must parse URL query strings." },
+                                { name: "MedusaJS", type: "Headless", cat: "/collections/", prod: "/products/", note: "API-first; structure is often 'Shopify-like'." },
+                                { name: "Saleor", type: "Headless", cat: "/category/", prod: "/product/", note: "GraphQL-driven; structure depends on frontend." },
+                                { name: "Shopline", type: "Fixed", cat: "/collections/", prod: "/products/", note: "Asian market leader; follows Shopify logic." },
+                                { name: "Nuvemshop", type: "Fixed", cat: "/c/", prod: "/p/", note: "Latin American focus; compact slug style." },
+                                { name: "CS-Cart", type: "Hybrid", cat: "/category/", prod: "/product/", note: "Can switch between SEO-friendly and IDs." },
+                                { name: "X-Cart", type: "Flexible", cat: "/category/", prod: "/p/", note: "SEO settings allow custom path prefixes." },
+                                { name: "Sylius", type: "Headless", cat: "/category/", prod: "/product/", note: "Symfony-based; typically clean REST paths." },
+                                { name: "Drupal Commerce", type: "CMS", cat: "/category/", prod: "/product/", note: "Deeply nested taxonomy possible." }
+                              ].map((row, index) => (
+                                <tr key={row.name} style={{ borderBottom: "1px solid #e1e3e5", background: index % 2 === 0 ? "#f9fafb" : "white" }}>
+                                  <td style={{ padding: "6px 8px", fontWeight: 500, color: "#202223" }}>{row.name}</td>
+                                  <td style={{ padding: "6px 8px", color: "#6d7175" }}>{row.type}</td>
+                                  <td style={{ padding: "6px 8px" }}><code>{row.cat}</code></td>
+                                  <td style={{ padding: "6px 8px" }}><code>{row.prod}</code></td>
+                                  <td style={{ padding: "6px 8px", color: "#5c5f62" }}>{row.note}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+
                       <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
                         <s-button variant="primary" disabled={isSavingProfile} onClick={handleSaveProfile}>
                           {isSavingProfile ? "Saving..." : "Save Profile"}
