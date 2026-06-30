@@ -32,3 +32,14 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model CrawlProfile {
+  id              String   @id @default(uuid())
+  shop            String
+  name            String
+  rootUrl         String
+  productPattern  String   @default("")
+  categoryPattern String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

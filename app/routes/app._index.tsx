@@ -423,9 +423,187 @@ export default function Index() {
   };
 
   // Website Crawling & Structure Selection States
+  const [profiles, setProfiles] = useState<any[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
+  const [profileNameInput, setProfileNameInput] = useState("");
+  const [profileRootUrlInput, setProfileRootUrlInput] = useState("");
+  const [profileProductPatternInput, setProfileProductPatternInput] = useState("");
+  const [profileCategoryPatternInput, setProfileCategoryPatternInput] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
   const [crawlUrlInput, setCrawlUrlInput] = useState("");
   const [customProductPattern, setCustomProductPattern] = useState("");
   const [customCategoryPattern, setCustomCategoryPattern] = useState("");
+
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      try {
+        const res = await fetch("/api/profiles");
+        const data = await res.json();
+        if (data.success && data.profiles) {
+          setProfiles(data.profiles);
+          if (data.profiles.length > 0) {
+            const first = data.profiles[0];
+            setSelectedProfileId(first.id);
+            setCrawlUrlInput(first.rootUrl);
+            setCustomProductPattern(first.productPattern);
+            setCustomCategoryPattern(first.categoryPattern);
+
+            // Load isolated session
+            const saved = localStorage.getItem(`ingest_ai_session_${first.id}`);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              const resetSources = (parsed.queuedSources || []).map((s: any) => {
+                if (s.status === "converting") return { ...s, status: "queued" };
+                if (s.status === "publishing") return { ...s, status: "ready" };
+                return s;
+              });
+              setQueuedSources(resetSources);
+              setCrawlResult(parsed.crawlResult || null);
+              setCustomCollections(parsed.customCollections || []);
+              setSelectedSourceId(parsed.selectedSourceId || null);
+            }
+          } else {
+            // Fallback to legacy global session if present, otherwise global fallback
+            const saved = localStorage.getItem("ingest_ai_session_global") || localStorage.getItem("ingest_ai_session");
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              const resetSources = (parsed.queuedSources || []).map((s: any) => {
+                if (s.status === "converting") return { ...s, status: "queued" };
+                if (s.status === "publishing") return { ...s, status: "ready" };
+                return s;
+              });
+              setQueuedSources(resetSources);
+              setCrawlResult(parsed.crawlResult || null);
+              setCustomCollections(parsed.customCollections || []);
+              setSelectedSourceId(parsed.selectedSourceId || null);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch profiles", e);
+      } finally {
+        setIsSessionLoaded(true);
+      }
+    };
+    fetchProfiles();
+  }, []);
+
+  const handleSelectProfile = (id: string | null) => {
+    setSelectedProfileId(id);
+    if (id) {
+      const profile = profiles.find(p => p.id === id);
+      if (profile) {
+        setCrawlUrlInput(profile.rootUrl);
+        setCustomProductPattern(profile.productPattern);
+        setCustomCategoryPattern(profile.categoryPattern);
+      }
+    } else {
+      setCrawlUrlInput("");
+      setCustomProductPattern("");
+      setCustomCategoryPattern("");
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!profileNameInput.trim() || !profileRootUrlInput.trim()) {
+      shopify.toast.show("Profile Name and Website URL are required");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const isEdit = isEditingProfile && selectedProfileId;
+      const res = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: isEdit ? selectedProfileId : undefined,
+          name: profileNameInput.trim(),
+          rootUrl: profileRootUrlInput.trim(),
+          productPattern: profileProductPatternInput.trim(),
+          categoryPattern: profileCategoryPatternInput.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.profile) {
+        shopify.toast.show(isEdit ? "Profile updated successfully" : "Profile created successfully");
+        
+        setProfiles(prev => {
+          if (isEdit) {
+            return prev.map(p => p.id === selectedProfileId ? data.profile : p);
+          } else {
+            return [data.profile, ...prev];
+          }
+        });
+
+        setSelectedProfileId(data.profile.id);
+        setCrawlUrlInput(data.profile.rootUrl);
+        setCustomProductPattern(data.profile.productPattern);
+        setCustomCategoryPattern(data.profile.categoryPattern);
+
+        setIsEditingProfile(false);
+        setIsCreatingProfile(false);
+      } else {
+        shopify.toast.show(`Failed to save profile: ${data.error || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      shopify.toast.show(`Error saving profile: ${e.message}`);
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleDeleteProfile = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this website profile?")) return;
+
+    try {
+      const res = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        shopify.toast.show("Profile deleted successfully");
+        setProfiles(prev => prev.filter(p => p.id !== id));
+        
+        if (selectedProfileId === id) {
+          setSelectedProfileId(null);
+          setCrawlUrlInput("");
+          setCustomProductPattern("");
+          setCustomCategoryPattern("");
+        }
+      } else {
+        shopify.toast.show(`Failed to delete profile: ${data.error || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      shopify.toast.show(`Error deleting profile: ${e.message}`);
+    }
+  };
+
+  const startCreatingProfile = () => {
+    setIsCreatingProfile(true);
+    setIsEditingProfile(false);
+    setProfileNameInput("");
+    setProfileRootUrlInput("");
+    setProfileProductPatternInput("");
+    setProfileCategoryPatternInput("");
+  };
+
+  const startEditingProfile = () => {
+    if (!selectedProfileId) return;
+    const profile = profiles.find(p => p.id === selectedProfileId);
+    if (!profile) return;
+    setIsEditingProfile(true);
+    setIsCreatingProfile(false);
+    setProfileNameInput(profile.name);
+    setProfileRootUrlInput(profile.rootUrl);
+    setProfileProductPatternInput(profile.productPattern);
+    setProfileCategoryPatternInput(profile.categoryPattern);
+  };
   const [isCrawling, setIsCrawling] = useState(false);
   const [crawlResult, setCrawlResult] = useState<any | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
@@ -444,7 +622,7 @@ export default function Index() {
     setIsCrawling(true);
     setCrawlResult(null);
     setExpandedCategories({});
-    setSelectedProducts({});
+    setSelectedProducts([]);
 
     // Start with initial system log
     setCrawlLogs([`[System] Initializing crawler for domain: ${new URL(crawlUrlInput).hostname}`]);
@@ -1505,36 +1683,17 @@ export default function Index() {
   }, [isAutoPublishing, queuedSources, crawlResult, groupCollectionOverride]);
 
   // --- Session Persistence & Queue Processing ---
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("ingest_ai_session");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.queuedSources) {
-          // Reset any stuck statuses from a previous session reload
-          const resetSources = parsed.queuedSources.map((s: QueuedSource) => {
-            if (s.status === "converting") return { ...s, status: "queued" };
-            if (s.status === "publishing") return { ...s, status: "ready" };
-            return s;
-          });
-          setQueuedSources(resetSources);
-        }
-        if (parsed.crawlResult) setCrawlResult(parsed.crawlResult);
-        if (parsed.customCollections) setCustomCollections(parsed.customCollections);
-        if (parsed.selectedSourceId) setSelectedSourceId(parsed.selectedSourceId);
-      }
-    } catch (e) {
-      console.error("Failed to load session", e);
-    }
-    setIsSessionLoaded(true);
-  }, []);
-
+  // The initial session loading is now handled inside the profiles fetch useEffect
+  
   useEffect(() => {
     if (isSessionLoaded) {
+      const activeKey = selectedProfileId 
+        ? `ingest_ai_session_${selectedProfileId}` 
+        : "ingest_ai_session_global";
       const session = { queuedSources, crawlResult, customCollections, selectedSourceId };
-      localStorage.setItem("ingest_ai_session", JSON.stringify(session));
+      localStorage.setItem(activeKey, JSON.stringify(session));
     }
-  }, [queuedSources, crawlResult, customCollections, selectedSourceId, isSessionLoaded]);
+  }, [queuedSources, crawlResult, customCollections, selectedSourceId, isSessionLoaded, selectedProfileId]);
 
   useEffect(() => {
     if (!isProcessingQueue) return;
@@ -2064,88 +2223,199 @@ export default function Index() {
                 borderRadius: "8px",
                 boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
               }}>
-                <s-heading>Crawl Vendor Catalog</s-heading>
-                <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
-                  To discover the entire category taxonomy and list of products, enter the vendor website domain below. The logical sitemap and structure crawler will automatically map out the catalog.
-                </p>
-                <form onSubmit={handleCrawlSubmit}>
-                  <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-                    <input
-                      type="url"
-                      placeholder="https://mock-vendor.com"
-                      value={crawlUrlInput}
-                      onChange={(e) => setCrawlUrlInput(e.target.value)}
-                      style={{
-                        flex: 1,
-                        minWidth: "250px",
-                        padding: "10px 14px",
-                        borderRadius: "6px",
-                        border: "1px solid #ccc",
-                        fontSize: "14px",
-                        boxSizing: "border-box",
-                      }}
-                      required
-                    />
-                    <s-button type="submit" variant="primary" disabled={isCrawling}>
-                      {isCrawling ? "Crawling..." : "Discover Catalog"}
-                    </s-button>
+                {isCreatingProfile || isEditingProfile ? (
+                  <div>
+                    <s-heading>{isEditingProfile ? "Edit Website Profile" : "Create New Website Profile"}</s-heading>
+                    <p style={{ marginBottom: "15px", fontSize: "13px", color: "#5c5f62", marginTop: "4px" }}>
+                      Provide a profile name, website domain, and optional example URLs to help the crawler identify categories and products.
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "10px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                          Profile Name (e.g. Outre Hair Vendor)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Outre Hair Vendor"
+                          value={profileNameInput}
+                          onChange={(e) => setProfileNameInput(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px 12px",
+                            borderRadius: "4px",
+                            border: "1px solid #bbb",
+                            fontSize: "13px",
+                            boxSizing: "border-box",
+                          }}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                          Root Website URL
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://www.outre.com/"
+                          value={profileRootUrlInput}
+                          onChange={(e) => setProfileRootUrlInput(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px 12px",
+                            borderRadius: "4px",
+                            border: "1px solid #bbb",
+                            fontSize: "13px",
+                            boxSizing: "border-box",
+                          }}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                          Collection/Category URL Example (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. /product-category/braids or /collections/hair"
+                          value={profileCategoryPatternInput}
+                          onChange={(e) => setProfileCategoryPatternInput(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px 12px",
+                            borderRadius: "4px",
+                            border: "1px solid #bbb",
+                            fontSize: "13px",
+                            boxSizing: "border-box",
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                          Product URL Example (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. /product/type-4-soft-natural or /products/item"
+                          value={profileProductPatternInput}
+                          onChange={(e) => setProfileProductPatternInput(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px 12px",
+                            borderRadius: "4px",
+                            border: "1px solid #bbb",
+                            fontSize: "13px",
+                            boxSizing: "border-box",
+                          }}
+                        />
+                      </div>
+                      <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                        <s-button variant="primary" disabled={isSavingProfile} onClick={handleSaveProfile}>
+                          {isSavingProfile ? "Saving..." : "Save Profile"}
+                        </s-button>
+                        <s-button onClick={() => { setIsCreatingProfile(false); setIsEditingProfile(false); }}>
+                          Cancel
+                        </s-button>
+                      </div>
+                    </div>
                   </div>
-                </form>
+                ) : (
+                  <div>
+                    <s-heading>Crawl Vendor Catalog</s-heading>
+                    <p style={{ marginBottom: "15px", fontSize: "14px", color: "#5c5f62" }}>
+                      Select a website crawl profile to run crawlers and discover products. Create multiple profiles to manage different vendor sites with isolated sessions.
+                    </p>
 
-                <details style={{ marginTop: "15px" }}>
-                  <summary style={{ cursor: "pointer", fontSize: "13px", color: "#008060", fontWeight: 500, outline: "none", userSelect: "none" }}>
-                    Advanced Crawler Settings (Custom URL Patterns)
-                  </summary>
-                  <div style={{
-                    marginTop: "10px",
-                    padding: "15px",
-                    background: "#f6f6f7",
-                    borderRadius: "6px",
-                    border: "1px solid #e1e3e5",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px"
-                  }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
-                        Custom Product URL Pattern (e.g. /product/ or outre.com/product/)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Default matches: /product/, /item/, /p/, /pd/"
-                        value={customProductPattern}
-                        onChange={(e) => setCustomProductPattern(e.target.value)}
-                        style={{
-                          width: "100%",
-                          padding: "8px 12px",
-                          borderRadius: "4px",
-                          border: "1px solid #bbb",
-                          fontSize: "13px",
-                          boxSizing: "border-box",
-                        }}
-                      />
+                    <div style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      gap: "12px",
+                      marginBottom: "15px",
+                      background: "#f6f6f7",
+                      padding: "12px",
+                      borderRadius: "6px",
+                      border: "1px solid #e1e3e5"
+                    }}>
+                      <div style={{ flex: 1, minWidth: "220px" }}>
+                        <select
+                          value={selectedProfileId || ""}
+                          onChange={(e) => handleSelectProfile(e.target.value || null)}
+                          style={{
+                            width: "100%",
+                            padding: "8px 12px",
+                            borderRadius: "4px",
+                            border: "1px solid #ccc",
+                            fontSize: "13.5px",
+                            background: "white",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <option value="">-- Select Website Profile --</option>
+                          {profiles.map(p => {
+                            let domainLabel = "";
+                            try {
+                              domainLabel = new URL(p.rootUrl).hostname;
+                            } catch {
+                              domainLabel = p.rootUrl;
+                            }
+                            return (
+                              <option key={p.id} value={p.id}>{p.name} ({domainLabel})</option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <s-button onClick={startCreatingProfile}>Add New Profile</s-button>
+                        {selectedProfileId && (
+                          <>
+                            <s-button onClick={startEditingProfile}>Edit</s-button>
+                            <s-button onClick={() => handleDeleteProfile(selectedProfileId)}>Delete</s-button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
-                        Custom Category URL Pattern (e.g. /product-category/ or collections/)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Default matches: /product-category/, /category/, /collection/, /catalog/"
-                        value={customCategoryPattern}
-                        onChange={(e) => setCustomCategoryPattern(e.target.value)}
-                        style={{
-                          width: "100%",
-                          padding: "8px 12px",
-                          borderRadius: "4px",
-                          border: "1px solid #bbb",
+
+                    {selectedProfileId ? (
+                      <div>
+                        <div style={{
+                          background: "#f1f2f4",
+                          padding: "12px 16px",
+                          borderRadius: "6px",
+                          border: "1px solid #e1e3e5",
                           fontSize: "13px",
-                          boxSizing: "border-box",
-                        }}
-                      />
-                    </div>
+                          marginBottom: "15px"
+                        }}>
+                          <div style={{ fontWeight: 600, color: "#202223", marginBottom: "6px" }}>Isolated Crawl Settings:</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "4px", color: "#5c5f62" }}>
+                            <div><strong>Website Root URL:</strong> <code>{crawlUrlInput}</code></div>
+                            {customProductPattern && <div><strong>Custom Product URL Pattern:</strong> <code>{customProductPattern}</code></div>}
+                            {customCategoryPattern && <div><strong>Custom Category URL Pattern:</strong> <code>{customCategoryPattern}</code></div>}
+                          </div>
+                        </div>
+                        
+                        <form onSubmit={handleCrawlSubmit}>
+                          <div style={{ width: "100%" }}>
+                            <s-button type="submit" variant="primary" disabled={isCrawling}>
+                              {isCrawling ? "Discovering Catalog..." : `Discover Catalog for ${profiles.find(p => p.id === selectedProfileId)?.name}`}
+                            </s-button>
+                          </div>
+                        </form>
+                      </div>
+                    ) : (
+                      <div style={{
+                        padding: "30px 20px",
+                        textAlign: "center",
+                        background: "#f9fafb",
+                        border: "1px dashed #ccc",
+                        borderRadius: "6px",
+                        color: "#6d7175",
+                        fontSize: "13.5px"
+                      }}>
+                        No website profile selected. Select a profile from the dropdown or click "Add New Profile" to configure a new crawler.
+                      </div>
+                    )}
                   </div>
-                </details>
+                )}
               </div>
             )}
 
