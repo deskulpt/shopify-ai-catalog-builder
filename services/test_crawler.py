@@ -310,8 +310,36 @@ We have an online catalog:
     assert files[0]["text"] == "DirectIndustry Brochure"
     print("HTML Viewer Link Extraction test passed successfully!")
 
+def test_classify_url():
+    from markitdown_service import classify_url
+    
+    # Test Root domain
+    assert classify_url("https://www.outre.com", "Home", "outre.com") == "root"
+    assert classify_url("https://www.outre.com/", "Home", "outre.com") == "root"
+    assert classify_url("https://www.outre.com/index.html", "Home", "outre.com") == "root"
+    
+    # Test Category precedence over Product prefix collisions
+    assert classify_url("https://www.outre.com/product-category/braids", "Braids", "outre.com") == "category"
+    assert classify_url("https://www.outre.com/category/hair", "Hair", "outre.com") == "category"
+    
+    # Test Product path
+    assert classify_url("https://www.outre.com/product/type-4-soft-natural-frappe-18-3x/", "Type 4 Soft Natural", "outre.com") == "product"
+    
+    # Test Custom Patterns override
+    patterns = {
+        "product": ["/item-detail/"],
+        "category": ["/list-view/"],
+        "root": ["/welcome/"]
+    }
+    assert classify_url("https://www.outre.com/item-detail/hair-123", "Hair Product", "outre.com", patterns=patterns) == "product"
+    assert classify_url("https://www.outre.com/list-view/braids", "Braids Listing", "outre.com", patterns=patterns) == "category"
+    assert classify_url("https://www.outre.com/welcome/home", "Welcome Home", "outre.com", patterns=patterns) == "root"
+    
+    print("Local URL classification tests passed successfully!")
+
 if __name__ == "__main__":
     print("Running crawler and extraction tests...")
+    test_classify_url()
     test_crawl_mock()
     test_crawl_real_failed_fallback()
     test_extract()

@@ -424,6 +424,8 @@ export default function Index() {
 
   // Website Crawling & Structure Selection States
   const [crawlUrlInput, setCrawlUrlInput] = useState("");
+  const [customProductPattern, setCustomProductPattern] = useState("");
+  const [customCategoryPattern, setCustomCategoryPattern] = useState("");
   const [isCrawling, setIsCrawling] = useState(false);
   const [crawlResult, setCrawlResult] = useState<any | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
@@ -442,52 +444,68 @@ export default function Index() {
     setIsCrawling(true);
     setCrawlResult(null);
     setExpandedCategories({});
-    setSelectedProducts([]);
+    setSelectedProducts({});
 
-    const logsList = [
-      "[System] Initializing headless scraper context...",
-      "[System] DNS lookup resolved for vendor domain",
-      "[Robots] Parsing robots.txt...",
-      "[Robots] Found crawl-delay: 2s. Throttling active.",
-      "[Sitemap] Locating sitemaps...",
-      "[Sitemap] Discovered 3 sitemaps with 184 URLs",
-      "[Sitemap] Filtering products sitemap for target catalog URLs",
-      "[Crawler] Found 42 product pages to analyze",
-      "[Crawler] Scraping: /products/safety-light-curtain-model-3.html",
-      "[AI Analyzer] Parsing schema.org metadata and product tables...",
-      "[Crawler] Scraping: /products/area-sensor-sas-series.html",
-      "[AI Analyzer] Found brand: OmniCorp, title: Area Sensor SAS Series",
-      "[Crawler] Scraping: /products/proximity-switch-pr-12.html",
-      "[AI Analyzer] Found 4 variants (PR-12N, PR-12P, PR-12N-M12, PR-12P-M12)",
-      "[Crawler] Scraping: /products/digital-fiber-sensor-d-30.html",
-      "[AI Analyzer] Extracted 12 specification fields from datasheet tables",
-      "[Grouping] Running series and SKU clustering algorithms...",
-      "[System] Crawling completed successfully. Rendering structure..."
+    // Start with initial system log
+    setCrawlLogs([`[System] Initializing crawler for domain: ${new URL(crawlUrlInput).hostname}`]);
+    
+    let tempLogIdx = 0;
+    const tempLogs = [
+      "[System] Establishing secure HTTP connection to vendor site...",
+      "[Robots] Downloading robots.txt to inspect crawl instructions...",
+      "[Sitemap] Looking for XML sitemaps to build structure...",
+      "[Crawler] Resolving catalog URL structures (scraping sitemaps/homepage)..."
     ];
-
-    setCrawlLogs([logsList[0]]);
-    let logIdx = 0;
+    
+    // Simulate initial loading while request is active
     const logInterval = setInterval(() => {
-      if (logIdx < logsList.length - 1) {
-        logIdx++;
-        setCrawlLogs(prev => [...prev, logsList[logIdx]]);
-      } else {
-        clearInterval(logInterval);
+      if (tempLogIdx < tempLogs.length) {
+        setCrawlLogs(prev => [...prev, tempLogs[tempLogIdx]]);
+        tempLogIdx++;
       }
-    }, 450);
+    }, 1500);
+
+    const patterns: Record<string, string[]> = {};
+    if (customProductPattern.trim()) {
+      patterns.product = [customProductPattern.trim()];
+    }
+    if (customCategoryPattern.trim()) {
+      patterns.category = [customCategoryPattern.trim()];
+    }
 
     try {
       const res = await fetch("/api/crawl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: crawlUrlInput }),
+        body: JSON.stringify({
+          url: crawlUrlInput,
+          patterns: Object.keys(patterns).length > 0 ? patterns : undefined
+        }),
       });
       const data = await res.json();
 
       clearInterval(logInterval);
 
+      // Play back actual backend logs dynamically
+      const backendLogs = data.logs || [
+        `[System] Initializing crawler for domain: ${new URL(crawlUrlInput).hostname}`,
+        `[System] Scraped site structure.`,
+        data.success ? `[System] Crawl finished successfully.` : `[Error] Crawl failed.`
+      ];
+
+      // Quick playback animation
+      let animIdx = 0;
+      setCrawlLogs([backendLogs[0]]);
+      const animInterval = setInterval(() => {
+        if (animIdx < backendLogs.length - 1) {
+          animIdx++;
+          setCrawlLogs(prev => [...prev, backendLogs[animIdx]]);
+        } else {
+          clearInterval(animInterval);
+        }
+      }, 80);
+
       if (data.success) {
-        setCrawlLogs(logsList);
         const sanitized = sanitizeCrawlResult(data);
         setCrawlResult(sanitized);
         
@@ -526,7 +544,6 @@ export default function Index() {
           setSelectedProducts(allStandaloneKeys);
         }
       } else {
-        setCrawlLogs(prev => [...prev, `[Error] Crawling failed: ${data.error || "Unknown error"}`]);
         shopify.toast.show(`Crawling failed: ${data.error || "Unknown error"}`);
       }
     } catch (err: any) {
@@ -2074,6 +2091,61 @@ export default function Index() {
                     </s-button>
                   </div>
                 </form>
+
+                <details style={{ marginTop: "15px" }}>
+                  <summary style={{ cursor: "pointer", fontSize: "13px", color: "#008060", fontWeight: 500, outline: "none", userSelect: "none" }}>
+                    Advanced Crawler Settings (Custom URL Patterns)
+                  </summary>
+                  <div style={{
+                    marginTop: "10px",
+                    padding: "15px",
+                    background: "#f6f6f7",
+                    borderRadius: "6px",
+                    border: "1px solid #e1e3e5",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px"
+                  }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                        Custom Product URL Pattern (e.g. /product/ or outre.com/product/)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Default matches: /product/, /item/, /p/, /pd/"
+                        value={customProductPattern}
+                        onChange={(e) => setCustomProductPattern(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 12px",
+                          borderRadius: "4px",
+                          border: "1px solid #bbb",
+                          fontSize: "13px",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
+                        Custom Category URL Pattern (e.g. /product-category/ or collections/)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Default matches: /product-category/, /category/, /collection/, /catalog/"
+                        value={customCategoryPattern}
+                        onChange={(e) => setCustomCategoryPattern(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 12px",
+                          borderRadius: "4px",
+                          border: "1px solid #bbb",
+                          fontSize: "13px",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </details>
               </div>
             )}
 

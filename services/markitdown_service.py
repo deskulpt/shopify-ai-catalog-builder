@@ -329,7 +329,7 @@ Downloads:
 """
 }
 
-def classify_url(url, text, domain, all_candidate_urls=None):
+def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
     if all_candidate_urls is None:
         all_candidate_urls = []
         
@@ -347,7 +347,45 @@ def classify_url(url, text, domain, all_candidate_urls=None):
     ignored_exts = ['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.zip', '.tar', '.gz', '.pdf', '.docx', '.xlsx', '.pptx', '.css', '.js']
     if any(path.endswith(ext) for ext in ignored_exts):
         return 'ignored'
+
+    # Match custom overrides first if provided
+    if patterns:
+        product_pats = patterns.get('product')
+        category_pats = patterns.get('category')
+        root_pats = patterns.get('root')
         
+        # Convert to list if single string
+        if isinstance(product_pats, str): product_pats = [product_pats]
+        if isinstance(category_pats, str): category_pats = [category_pats]
+        if isinstance(root_pats, str): root_pats = [root_pats]
+        
+        def matches_any(url_str, pats):
+            if not pats: return False
+            for pat in pats:
+                if not pat: continue
+                try:
+                    if pat.startswith('^') or pat.endswith('$') or '\\' in pat:
+                        if re.search(pat, url_str, re.IGNORECASE):
+                            return True
+                    else:
+                        if pat.lower() in url_str.lower():
+                            return True
+                except Exception:
+                    if pat.lower() in url_str.lower():
+                        return True
+            return False
+
+        if matches_any(url, root_pats):
+            return 'root'
+        if matches_any(url, category_pats):
+            return 'category'
+        if matches_any(url, product_pats):
+            return 'product'
+
+    # Check if root domain (homepage)
+    if path in ['', '/', '/index.html', '/index.htm', '/index.php']:
+        return 'root'
+
     # Ignore specific utility fragment patterns
     if fragment.lower() in ['main-content', 'how-works', 'customer', 'supplier', 'seller', 'header', 'footer', 'top', 'bottom', 'menu']:
         return 'ignored'
@@ -361,24 +399,24 @@ def classify_url(url, text, domain, all_candidate_urls=None):
     ]
     if any(k in path for k in ignored_keywords):
         return 'ignored'
-        
-    # 2. Check if this is a fragment product link
+
+    # 3. Check if this is a fragment product link
     if fragment:
         return 'product'
         
-    # 3. Check for strong product path indicators
+    # 4. Check for strong category path indicators (Category BEFORE Product)
+    category_path_keywords = ['/product-category/', '/category/', '/c/', '/collection/', '/collections/', '/catalog/', '/department/', '/categories/']
+    if any(k in path for k in category_path_keywords):
+        return 'category'
+    if 'catid=' in query or 'cat=' in query or 'collection_id=' in query:
+        return 'category'
+        
+    # 5. Check for strong product path indicators
     product_path_keywords = ['/product/', '/p/', '/item/', '/pd/', '/shop/', '/store/']
     if any(k in path for k in product_path_keywords):
         return 'product'
     if 'product_id=' in query or 'id=' in query or 'item=' in query:
         return 'product'
-        
-    # 4. Check for strong category path indicators
-    category_path_keywords = ['/category/', '/c/', '/collection/', '/catalog/', '/department/', '/categories/']
-    if any(k in path for k in category_path_keywords):
-        return 'category'
-    if 'catid=' in query or 'cat=' in query or 'collection_id=' in query:
-        return 'category'
         
     # 5. Check anchor text keywords
     if any(term in text_lower for term in ['products available', 'items available', 'view complete range', 'view all products', 'view all categories', 'our products']):
@@ -597,8 +635,10 @@ def get_mock_taxonomy(domain):
 @app.route('/crawl', methods=['POST'])
 def crawl_site():
     """Crawl a website to discover structure (sitemaps, robots, llms.txt, categories, products)"""
+    import datetime
     data = request.get_json() or {}
     url = data.get('url')
+    patterns = data.get('patterns') or data.get('url_patterns') or {}
     
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
@@ -611,14 +651,34 @@ def crawl_site():
         url = "https://" + url
         parsed_url = urllib.parse.urlparse(url)
         domain = parsed_url.netloc
+
+    # Setup structured crawler logs
+    logs = []
+    
+    def log_event(message):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        formatted = f"{message}"
+        logs.append(formatted)
+        # Also append to persistent workspace file
+        try:
+            with open("crawl_logs.txt", "a") as f:
+                f.write(f"[{timestamp}] {formatted}\n")
+        except:
+            pass
+
+    log_event(f"[System] Initializing crawler for domain: {domain}")
         
     # Check if mock domain is requested or invalid
     if "mock" in domain or "example" in domain or "test" in domain or "directindustry" in domain or not domain:
-        return jsonify(get_mock_taxonomy(domain or "mock-vendor.com"))
+        log_event("[System] Mock domain or invalid hostname detected. Loading fallback mock taxonomy...")
+        mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
+        mock_data["logs"] = logs
+        return jsonify(mock_data)
         
     try:
         # 1. Fetch robots.txt
         robots_url = f"{parsed_url.scheme}://{domain}/robots.txt"
+        log_event("[Robots] Fetching robots.txt...")
         sitemaps = []
         crawl_delay = None
         try:
@@ -626,25 +686,32 @@ def crawl_site():
             if r_robots.status_code == 200:
                 for line in r_robots.text.split('\n'):
                     if line.lower().startswith('sitemap:'):
-                        sitemaps.append(line.split(':', 1)[1].strip())
+                        sitemap_url = line.split(':', 1)[1].strip()
+                        sitemaps.append(sitemap_url)
+                        log_event(f"[Robots] Found sitemap: {sitemap_url}")
                     elif line.lower().startswith('crawl-delay:'):
                         try:
                             crawl_delay = int(line.split(':', 1)[1].strip())
+                            log_event(f"[Robots] Discovered crawl delay: {crawl_delay}s")
                         except:
                             pass
-        except Exception:
-            pass
+        except Exception as robots_err:
+            log_event(f"[Robots] Failed to fetch or parse robots.txt: {str(robots_err)}")
             
         if not sitemaps:
-            sitemaps.append(f"{parsed_url.scheme}://{domain}/sitemap.xml")
+            default_sitemap = f"{parsed_url.scheme}://{domain}/sitemap.xml"
+            sitemaps.append(default_sitemap)
+            log_event(f"[Robots] No sitemaps specified. Defaulting to: {default_sitemap}")
             
         # 2. Fetch llms.txt
         llms_url = f"{parsed_url.scheme}://{domain}/llms.txt"
         llms_txt = None
+        log_event("[System] Attempting to fetch llms.txt...")
         try:
             r_llms = http.get(llms_url, timeout=5, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             if r_llms.status_code == 200:
                 llms_txt = r_llms.text[:2000]
+                log_event("[System] Successfully fetched and parsed llms.txt")
         except Exception:
             pass
             
@@ -654,6 +721,7 @@ def crawl_site():
         sitemap_parsed = False
         
         for sitemap in sitemaps:
+            log_event(f"[Sitemap] Fetching and parsing sitemap: {sitemap}")
             try:
                 r_sm = http.get(sitemap, timeout=5, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
                 if r_sm.status_code == 200:
@@ -661,6 +729,11 @@ def crawl_site():
                     locs = [loc.text for loc in soup.find_all("loc")]
                     if locs:
                         sitemap_parsed = True
+                        log_event(f"[Sitemap] Successfully extracted {len(locs)} URLs from sitemap")
+                        
+                        product_logged_count = 0
+                        category_logged_count = 0
+                        
                         for l in locs:
                             l_parsed = urllib.parse.urlparse(l)
                             path_parts = [p for p in l_parsed.path.split('/') if p]
@@ -668,21 +741,35 @@ def crawl_site():
                             if path_parts:
                                 name = path_parts[-1].replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title()
                             
-                            classification = classify_url(l, name, domain, all_candidate_urls=locs)
+                            classification = classify_url(l, name, domain, all_candidate_urls=locs, patterns=patterns)
                             if classification == 'ignored':
                                 continue
                             elif classification == 'category':
                                 if not any(cat["url"] == l for cat in discovered_categories):
                                     discovered_categories.append({"name": name, "url": l, "products": []})
+                                    if category_logged_count < 10:
+                                        log_event(f"[Crawler] Classified sitemap URL as Category: {l} ({name})")
+                                        category_logged_count += 1
+                                    elif category_logged_count == 10:
+                                        log_event("[Crawler] Discovered additional sitemap categories...")
+                                        category_logged_count += 1
                             elif classification == 'product':
                                 if not any(p["url"] == l for p in discovered_products):
                                     discovered_products.append({"name": name, "url": l})
-            except Exception:
-                pass
+                                    if product_logged_count < 5:
+                                        log_event(f"[Crawler] Classified sitemap URL as Product: {l} ({name})")
+                                        product_logged_count += 1
+                                    elif product_logged_count == 5:
+                                        log_event("[Crawler] Discovered additional sitemap products...")
+                                        product_logged_count += 1
+            except Exception as sm_err:
+                log_event(f"[Sitemap] Error reading sitemap {sitemap}: {str(sm_err)}")
                 
-        # 4. Fetch Homepage and parse links/schema
+        # 4. Fetch Homepage and parse links/schema if sitemaps did not return products
         if not sitemap_parsed or len(discovered_products) == 0:
+            log_event("[System] Sitemaps empty or missing. Falling back to scraping homepage...")
             try:
+                log_event(f"[Crawler] Fetching homepage content: {url}")
                 r_home = http.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
                 if r_home.status_code == 200:
                     soup = BeautifulSoup(r_home.content, "html.parser")
@@ -694,6 +781,7 @@ def crawl_site():
                             s_data = json.loads(s.string)
                             if isinstance(s_data, dict):
                                 if s_data.get("@type") == "ItemList":
+                                    log_event("[Crawler] Discovered JSON-LD ItemList schema on homepage")
                                     for item in s_data.get("itemListElement", []):
                                         if isinstance(item, dict) and "url" in item:
                                             discovered_products.append({"name": item.get("name", "Product"), "url": item["url"]})
@@ -707,7 +795,11 @@ def crawl_site():
                         href = a["href"]
                         full_href = urllib.parse.urljoin(url, href)
                         candidate_urls.append(full_href)
-                        
+                    
+                    log_event(f"[Crawler] Found {len(anchors)} anchor links on homepage to classify")
+                    product_logged_count = 0
+                    category_logged_count = 0
+                    
                     for a in anchors:
                         href = a["href"]
                         full_href = urllib.parse.urljoin(url, href)
@@ -729,69 +821,81 @@ def crawl_site():
                         if not text or len(text) < 2:
                             continue
                             
-                        classification = classify_url(full_href, text, domain, all_candidate_urls=candidate_urls)
+                        classification = classify_url(full_href, text, domain, all_candidate_urls=candidate_urls, patterns=patterns)
                         if classification == 'ignored':
                             continue
                         elif classification == 'category':
                             if not any(cat["url"] == full_href for cat in discovered_categories):
                                 discovered_categories.append({"name": text, "url": full_href, "products": []})
+                                if category_logged_count < 5:
+                                    log_event(f"[Crawler] Classified homepage link as Category: {full_href} ({text})")
+                                    category_logged_count += 1
                         elif classification == 'product':
                             if not any(p["url"] == full_href for p in discovered_products):
                                 discovered_products.append({"name": text, "url": full_href})
-            except Exception:
-                pass
+                                if product_logged_count < 5:
+                                    log_event(f"[Crawler] Classified homepage link as Product: {full_href} ({text})")
+                                    product_logged_count += 1
+            except Exception as home_err:
+                log_event(f"[Error] Homepage scraping failed: {str(home_err)}")
                 
         # 5. Fetch Category Pages to discover products under them
-        for cat in discovered_categories[:6]:
-            try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                r_cat = http.get(cat["url"], headers=headers, timeout=8)
-                if r_cat.status_code == 200:
-                    cat_soup = BeautifulSoup(r_cat.content, "html.parser")
-                    cat_anchors = cat_soup.find_all("a", href=True)
-                    cat_candidate_urls = []
-                    for a in cat_anchors:
-                        href = a["href"]
-                        full_href = urllib.parse.urljoin(cat["url"], href)
-                        cat_candidate_urls.append(full_href)
-                        
-                    for a in cat_anchors:
-                        href = a["href"]
-                        full_href = urllib.parse.urljoin(cat["url"], href)
-                        
-                        text = a.get_text().strip()
-                        if not text:
-                            img = a.find('img')
-                            if img and img.get('alt'):
-                                text = img.get('alt').strip()
-                            else:
-                                text = a.get('title', '').strip()
-                        
-                        if not text or len(text) < 2:
-                            parsed_fh = urllib.parse.urlparse(full_href)
-                            path_fh = parsed_fh.path.lower()
-                            if any(k in path_fh for k in ['/product/', '/p/', '/item/']) or parsed_fh.fragment:
-                                text = path_fh.split('/')[-1].replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title()
-                        
-                        if not text or len(text) < 2:
-                            continue
+        if discovered_categories and len(discovered_products) < 20:
+            log_event(f"[System] Crawling up to 6 category pages to discover deeper product links...")
+            for cat in discovered_categories[:6]:
+                log_event(f"[Crawler] Fetching category page: {cat['url']}")
+                try:
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                    r_cat = http.get(cat["url"], headers=headers, timeout=8)
+                    if r_cat.status_code == 200:
+                        cat_soup = BeautifulSoup(r_cat.content, "html.parser")
+                        cat_anchors = cat_soup.find_all("a", href=True)
+                        cat_candidate_urls = []
+                        for a in cat_anchors:
+                            href = a["href"]
+                            full_href = urllib.parse.urljoin(cat["url"], href)
+                            cat_candidate_urls.append(full_href)
                             
-                        classification = classify_url(full_href, text, domain, all_candidate_urls=cat_candidate_urls)
-                        if classification == 'product':
-                            if not any(p["url"] == full_href for p in cat["products"]):
-                                cat["products"].append({"name": text, "url": full_href})
-            except Exception:
-                pass
-                
+                        for a in cat_anchors:
+                            href = a["href"]
+                            full_href = urllib.parse.urljoin(cat["url"], href)
+                            
+                            text = a.get_text().strip()
+                            if not text:
+                                img = a.find('img')
+                                if img and img.get('alt'):
+                                    text = img.get('alt').strip()
+                                else:
+                                    text = a.get('title', '').strip()
+                            
+                            if not text or len(text) < 2:
+                                parsed_fh = urllib.parse.urlparse(full_href)
+                                path_fh = parsed_fh.path.lower()
+                                if any(k in path_fh for k in ['/product/', '/p/', '/item/']) or parsed_fh.fragment:
+                                    text = path_fh.split('/')[-1].replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title()
+                            
+                            if not text or len(text) < 2:
+                                continue
+                                
+                            classification = classify_url(full_href, text, domain, all_candidate_urls=cat_candidate_urls, patterns=patterns)
+                            if classification == 'product':
+                                if not any(p["url"] == full_href for p in cat["products"]):
+                                    cat["products"].append({"name": text, "url": full_href})
+                except Exception as cat_err:
+                    log_event(f"[Crawler] Warning: Failed to crawl category page {cat['url']}: {str(cat_err)}")
+                    
         # Organize discovered products into categories
         if not discovered_categories and not discovered_products:
+            log_event("[Error] Crawl failed to find any products or categories. Displaying fallback taxonomy.")
             mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
             mock_data["warning"] = f"Could not reach {domain} or discover any products. Displaying fallback mock taxonomy."
+            mock_data["logs"] = logs
             return jsonify(mock_data)
 
         if not discovered_categories:
             discovered_categories.append({"name": "General Products", "url": url, "products": []})
             
+        log_event("[Grouping] Organizing discovered products into categories...")
         for p in discovered_products:
             assigned = False
             for cat in discovered_categories:
@@ -813,6 +917,8 @@ def crawl_site():
         for cat in discovered_categories:
             cat["product_count"] = len(cat["products"])
             
+        log_event("[System] Crawling completed successfully. Rendering structure...")
+        
         return jsonify({
             "success": True,
             "domain": domain,
@@ -822,12 +928,15 @@ def crawl_site():
             },
             "llms_txt": llms_txt,
             "categories": discovered_categories,
-            "mocked": False
+            "mocked": False,
+            "logs": logs
         })
         
     except Exception as e:
+        log_event(f"[Error] Crawl failed with fatal exception: {str(e)}")
         mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
         mock_data["warning"] = f"Crawl failed ({str(e)}). Displaying fallback mock taxonomy."
+        mock_data["logs"] = logs
         return jsonify(mock_data)
 
 WORLD_CURRENCIES = {

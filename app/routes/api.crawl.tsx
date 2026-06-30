@@ -10,18 +10,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const data = await request.json().catch(() => ({}));
-    const url = data.url;
+    const { url, patterns } = data;
 
     if (!url) {
       return Response.json({ error: "No URL provided" }, { status: 400 });
     }
 
-    // Forward URL to Python crawler service
+    // Forward URL and custom patterns to Python crawler service
     const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
     const response = await fetch(`${markitdownUrl}/crawl`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, patterns }),
     });
 
     if (!response.ok) {
