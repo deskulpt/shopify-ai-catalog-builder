@@ -20,7 +20,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const targetFormData = new FormData();
     targetFormData.append("file", file);
 
-    const response = await fetch("http://localhost:5005/convert", {
+    const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
+    const response = await fetch(`${markitdownUrl}/convert`, {
       method: "POST",
       body: targetFormData,
     });

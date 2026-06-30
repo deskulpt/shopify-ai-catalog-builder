@@ -145,10 +145,11 @@ interface QueuedSource {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
-  // Ping Python Flask service on port 5005
+  // Ping Python Flask service
   let pythonServiceStatus = "offline";
   try {
-    const response = await fetch("http://localhost:5005/health", { 
+    const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
+    const response = await fetch(`${markitdownUrl}/health`, { 
       signal: AbortSignal.timeout(1500) 
     });
     if (response.ok) {

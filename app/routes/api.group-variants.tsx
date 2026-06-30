@@ -18,7 +18,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Forward to Python group-variants service
-    const response = await fetch("http://localhost:5005/group-variants", {
+    const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
+    const response = await fetch(`${markitdownUrl}/group-variants`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ products, collections }),

@@ -17,7 +17,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Forward URL to Python crawler service
-    const response = await fetch("http://localhost:5005/crawl", {
+    const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
+    const response = await fetch(`${markitdownUrl}/crawl`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),

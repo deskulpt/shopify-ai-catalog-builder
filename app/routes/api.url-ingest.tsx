@@ -17,7 +17,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Forward URL to Python MarkItDown service
-    const response = await fetch("http://localhost:5005/convert-url", {
+    const markitdownUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:5005";
+    const response = await fetch(`${markitdownUrl}/convert-url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
