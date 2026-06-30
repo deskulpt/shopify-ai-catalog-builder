@@ -932,36 +932,58 @@ def crawl_site():
             mock_data["logs"] = logs
             return jsonify(mock_data)
 
-        if not discovered_categories:
-            discovered_categories.append({"name": "General Products", "url": url, "products": []})
+        # Check if the input URL is a targeted category page
+        is_targeted_category = (classify_url(url, "", domain, patterns=patterns) == 'category')
+        
+        if is_targeted_category:
+            log_event(f"[Grouping] Targeted Category Crawl detected. Filtering products matching path segment: {url}")
+            # Filter products to only those matching the targeted category URL path
+            filtered_products = [
+                p for p in discovered_products 
+                if matches_category_segments(url, p["url"])
+            ]
             
-        log_event("[Grouping] Organizing discovered products into categories...")
-        # Sort categories by segment length descending to match most specific sub-collections first
-        def get_category_segment_length(cat):
-            cat_path = urllib.parse.urlparse(cat["url"]).path.lower()
-            for prefix in ['/product-category', '/category', '/collections', '/catalog']:
-                if cat_path.startswith(prefix):
-                    cat_path = cat_path[len(prefix):]
-            return len([s for s in cat_path.split('/') if s])
-
-        sorted_categories = sorted(discovered_categories, key=get_category_segment_length, reverse=True)
-
-        for p in discovered_products:
-            assigned = False
-            for cat in sorted_categories:
-                if matches_category_segments(cat["url"], p["url"]):
-                    if not any(x["url"] == p["url"] for x in cat["products"]):
-                        cat["products"].append(p)
-                    assigned = True
-                    break
-            if not assigned:
-                if not any(x["url"] == p["url"] for x in discovered_categories[0]["products"]):
-                    discovered_categories[0]["products"].append(p)
-                
-        if len(discovered_categories) > 1:
-            discovered_categories = [c for c in discovered_categories if c["products"]]
+            # Format name hierarchically
+            parsed_url = urllib.parse.urlparse(url)
+            path_parts = [p for p in parsed_url.path.split('/') if p and p.lower() not in ['product-category', 'category', 'collections', 'collection', 'catalog', 'department']]
+            cat_name = "Targeted Collection"
+            if path_parts:
+                cat_name = " > ".join([part.replace('-', ' ').replace('_', ' ').title() for part in path_parts])
+            
+            discovered_categories = [{"name": cat_name, "url": url, "products": filtered_products}]
+            discovered_products = filtered_products
+            log_event(f"[Grouping] Found {len(filtered_products)} products under targeted collection '{cat_name}'")
+        else:
             if not discovered_categories:
-                discovered_categories.append({"name": "General Products", "url": url, "products": discovered_products})
+                discovered_categories.append({"name": "General Products", "url": url, "products": []})
+                
+            log_event("[Grouping] Organizing discovered products into categories...")
+            # Sort categories by segment length descending to match most specific sub-collections first
+            def get_category_segment_length(cat):
+                cat_path = urllib.parse.urlparse(cat["url"]).path.lower()
+                for prefix in ['/product-category', '/category', '/collections', '/catalog']:
+                    if cat_path.startswith(prefix):
+                        cat_path = cat_path[len(prefix):]
+                return len([s for s in cat_path.split('/') if s])
+
+            sorted_categories = sorted(discovered_categories, key=get_category_segment_length, reverse=True)
+
+            for p in discovered_products:
+                assigned = False
+                for cat in sorted_categories:
+                    if matches_category_segments(cat["url"], p["url"]):
+                        if not any(x["url"] == p["url"] for x in cat["products"]):
+                            cat["products"].append(p)
+                        assigned = True
+                        break
+                if not assigned:
+                    if not any(x["url"] == p["url"] for x in discovered_categories[0]["products"]):
+                        discovered_categories[0]["products"].append(p)
+                    
+            if len(discovered_categories) > 1:
+                discovered_categories = [c for c in discovered_categories if c["products"]]
+                if not discovered_categories:
+                    discovered_categories.append({"name": "General Products", "url": url, "products": discovered_products})
                 
         for cat in discovered_categories:
             cat["product_count"] = len(cat["products"])

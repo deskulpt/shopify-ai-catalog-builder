@@ -615,9 +615,66 @@ export default function Index() {
   const [globalOverwriteDescription, setGlobalOverwriteDescription] = useState(true);
   const [globalOverwriteVariants, setGlobalOverwriteVariants] = useState(true);
 
+  const handleSingleProductUrlRoute = async (targetUrl: string) => {
+    const newSource: QueuedSource = {
+      id: Math.random().toString(36).substring(7),
+      name: targetUrl,
+      type: "url",
+      status: "converting",
+      markdown: "",
+    };
+    setQueuedSources(prev => [...prev, newSource]);
+    setUrlInput("");
+    setUrlFavicon(null);
+    setUrlValidationError(null);
+    setActiveTab("queue");
+
+    try {
+      const res = await fetch("/api/url-ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: newSource.name }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        setQueuedSources(prev => 
+          prev.map(s => s.id === newSource.id 
+            ? { ...s, status: "ready", markdown: data.markdown } 
+            : s
+          )
+        );
+        setSelectedSourceId(newSource.id);
+      } else {
+        setQueuedSources(prev => 
+          prev.map(s => s.id === newSource.id 
+            ? { ...s, status: "failed", error: data.error } 
+            : s
+          )
+        );
+      }
+    } catch (err: any) {
+      setQueuedSources(prev => 
+        prev.map(s => s.id === newSource.id 
+          ? { ...s, status: "failed", error: err.message } 
+          : s
+        )
+      );
+    }
+  };
+
   const handleCrawlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!crawlUrlInput) return;
+
+    // Check if the input URL is a product page and should auto-route to Single Product URL Mode
+    const isCustomProduct = customProductPattern && crawlUrlInput.toLowerCase().includes(customProductPattern.toLowerCase());
+    const isDefaultProduct = /\/(product|products|item|p|pd)\//i.test(crawlUrlInput);
+
+    if (isCustomProduct || isDefaultProduct) {
+      handleSingleProductUrlRoute(crawlUrlInput);
+      return;
+    }
 
     setIsCrawling(true);
     setCrawlResult(null);
@@ -2387,17 +2444,42 @@ export default function Index() {
                         }}>
                           <div style={{ fontWeight: 600, color: "#202223", marginBottom: "6px" }}>Isolated Crawl Settings:</div>
                           <div style={{ display: "flex", flexDirection: "column", gap: "4px", color: "#5c5f62" }}>
-                            <div><strong>Website Root URL:</strong> <code>{crawlUrlInput}</code></div>
+                            <div><strong>Website Root URL:</strong> <code>{profiles.find(p => p.id === selectedProfileId)?.rootUrl}</code></div>
                             {customProductPattern && <div><strong>Custom Product URL Pattern:</strong> <code>{customProductPattern}</code></div>}
                             {customCategoryPattern && <div><strong>Custom Category URL Pattern:</strong> <code>{customCategoryPattern}</code></div>}
                           </div>
                         </div>
                         
-                        <form onSubmit={handleCrawlSubmit}>
-                          <div style={{ width: "100%" }}>
-                            <s-button type="submit" variant="primary" disabled={isCrawling}>
-                              {isCrawling ? "Discovering Catalog..." : `Discover Catalog for ${profiles.find(p => p.id === selectedProfileId)?.name}`}
-                            </s-button>
+                        <form onSubmit={handleCrawlSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                          <div>
+                            <label style={{ display: "block", fontSize: "13px", fontWeight: 500, color: "#202223", marginBottom: "6px" }}>
+                              Target URL for Current Session (Root, Collection, or Product)
+                            </label>
+                            <div style={{ display: "flex", gap: "10px" }}>
+                              <input
+                                type="url"
+                                placeholder="e.g. https://www.outre.com/product-category/braids"
+                                value={crawlUrlInput}
+                                onChange={(e) => setCrawlUrlInput(e.target.value)}
+                                style={{
+                                  flex: 1,
+                                  padding: "10px 14px",
+                                  borderRadius: "6px",
+                                  border: "1px solid #ccc",
+                                  fontSize: "14px",
+                                  boxSizing: "border-box",
+                                }}
+                                required
+                              />
+                              <div style={{ display: "flex", alignItems: "stretch" }}>
+                                <s-button type="submit" variant="primary" disabled={isCrawling}>
+                                  {isCrawling ? "Discovering..." : "Discover / Ingest"}
+                                </s-button>
+                              </div>
+                            </div>
+                            <span style={{ fontSize: "12px", color: "#6d7175", marginTop: "4px", display: "block" }}>
+                              Pasting a product page URL will automatically route to Single URL Mode for instant details extraction.
+                            </span>
                           </div>
                         </form>
                       </div>
