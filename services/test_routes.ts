@@ -3,7 +3,7 @@ import { action as publishAction } from "../app/routes/api.publish";
 import { setMockAuthenticate } from "../app/shopify.server";
 
 // Mock response helpers
-const createMockAdmin = (graphqlMock: jest.Mock | any) => ({
+const createMockAdmin = (graphqlMock: any) => ({
   graphql: graphqlMock,
 });
 
@@ -35,7 +35,7 @@ async function runTests() {
   setMockAuthenticate(() => ({ admin: createMockAdmin(graphqlMock1) }));
 
   const mockRequest1 = new Request("http://localhost:3000/api/metafields");
-  const response1 = await metafieldsLoader({ request: mockRequest1, params: {} });
+  const response1 = await metafieldsLoader({ request: mockRequest1, params: {} } as any);
   const data1 = await response1.json() as any;
 
   if (data1.success && data1.definitions.length === 2) {
@@ -81,7 +81,7 @@ async function runTests() {
     })
   });
 
-  const response2 = await metafieldsAction({ request: mockRequest2, params: {} });
+  const response2 = await metafieldsAction({ request: mockRequest2, params: {} } as any);
   const data2 = await response2.json() as any;
 
   if (data2.success && data2.definition.name === "Cap Size" && data2.definition.key === "cap_size") {
@@ -171,7 +171,7 @@ async function runTests() {
     body: JSON.stringify(publishPayload)
   });
 
-  const response3 = await publishAction({ request: mockRequest3, params: {} });
+  const response3 = await publishAction({ request: mockRequest3, params: {} } as any);
   const data3 = await response3.json() as any;
 
   if (data3.success && data3.productId === "gid://shopify/Product/123456") {

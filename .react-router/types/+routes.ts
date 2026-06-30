@@ -41,9 +41,6 @@ type Pages = {
   "/api/profiles": {
     params: {};
   };
-  "/api/contact": {
-    params: {};
-  };
   "/api/extract": {
     params: {};
   };
@@ -67,9 +64,6 @@ type Pages = {
   "/app": {
     params: {};
   };
-  "/app/additional": {
-    params: {};
-  };
   "/app/settings": {
     params: {};
   };
@@ -81,7 +75,7 @@ type Pages = {
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/webhooks/app/scopes_update" | "/webhooks/app/uninstalled" | "/api/check-existing" | "/api/group-variants" | "/api/collections" | "/api/metafields" | "/api/pdf-config" | "/api/url-ingest" | "/api/profiles" | "/api/contact" | "/api/extract" | "/api/publish" | "/api/upload" | "/auth/login" | "/api/crawl" | "/auth/*" | "/app" | "/app/additional" | "/app/settings" | "/app/help";
+    page: "/" | "/webhooks/app/scopes_update" | "/webhooks/app/uninstalled" | "/api/check-existing" | "/api/group-variants" | "/api/collections" | "/api/metafields" | "/api/pdf-config" | "/api/url-ingest" | "/api/profiles" | "/api/extract" | "/api/publish" | "/api/upload" | "/auth/login" | "/api/crawl" | "/auth/*" | "/app" | "/app/settings" | "/app/help";
   };
   "routes/webhooks.app.scopes_update.tsx": {
     id: "routes/webhooks.app.scopes_update";
@@ -119,10 +113,6 @@ type RouteFiles = {
     id: "routes/api.profiles";
     page: "/api/profiles";
   };
-  "routes/api.contact.tsx": {
-    id: "routes/api.contact";
-    page: "/api/contact";
-  };
   "routes/api.extract.tsx": {
     id: "routes/api.extract";
     page: "/api/extract";
@@ -153,11 +143,7 @@ type RouteFiles = {
   };
   "routes/app.tsx": {
     id: "routes/app";
-    page: "/app" | "/app/additional" | "/app/settings" | "/app/help";
-  };
-  "routes/app.additional.tsx": {
-    id: "routes/app.additional";
-    page: "/app/additional";
+    page: "/app" | "/app/settings" | "/app/help";
   };
   "routes/app.settings.tsx": {
     id: "routes/app.settings";
@@ -184,7 +170,6 @@ type RouteModules = {
   "routes/api.pdf-config": typeof import("./app/routes/api.pdf-config.tsx");
   "routes/api.url-ingest": typeof import("./app/routes/api.url-ingest.tsx");
   "routes/api.profiles": typeof import("./app/routes/api.profiles.tsx");
-  "routes/api.contact": typeof import("./app/routes/api.contact.tsx");
   "routes/api.extract": typeof import("./app/routes/api.extract.tsx");
   "routes/api.publish": typeof import("./app/routes/api.publish.tsx");
   "routes/api.upload": typeof import("./app/routes/api.upload.tsx");
@@ -193,7 +178,6 @@ type RouteModules = {
   "routes/_index": typeof import("./app/routes/_index/route.tsx");
   "routes/auth.$": typeof import("./app/routes/auth.$.tsx");
   "routes/app": typeof import("./app/routes/app.tsx");
-  "routes/app.additional": typeof import("./app/routes/app.additional.tsx");
   "routes/app.settings": typeof import("./app/routes/app.settings.tsx");
   "routes/app._index": typeof import("./app/routes/app._index.tsx");
   "routes/app.help": typeof import("./app/routes/app.help.tsx");
