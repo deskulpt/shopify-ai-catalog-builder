@@ -422,6 +422,26 @@ export default function Index() {
     }
   };
 
+  // Shopify Metafield Mapping States
+  const [existingMetafields, setExistingMetafields] = useState<any[]>([]);
+  const [metafieldMappings, setMetafieldMappings] = useState<Record<string, string>>({});
+  const [isCreatingMetafield, setIsCreatingMetafield] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const fetchMetafieldDefinitions = async () => {
+      try {
+        const res = await fetch("/api/metafields");
+        const data = await res.json();
+        if (data.success && data.definitions) {
+          setExistingMetafields(data.definitions);
+        }
+      } catch (e) {
+        console.error("Failed to fetch metafield definitions", e);
+      }
+    };
+    fetchMetafieldDefinitions();
+  }, []);
+
   // Website Crawling & Structure Selection States
   const [profiles, setProfiles] = useState<any[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
@@ -464,6 +484,7 @@ export default function Index() {
               setCrawlResult(parsed.crawlResult || null);
               setCustomCollections(parsed.customCollections || []);
               setSelectedSourceId(parsed.selectedSourceId || null);
+              setMetafieldMappings(parsed.metafieldMappings || {});
             }
           } else {
             // Fallback to legacy global session if present, otherwise global fallback
@@ -479,6 +500,7 @@ export default function Index() {
               setCrawlResult(parsed.crawlResult || null);
               setCustomCollections(parsed.customCollections || []);
               setSelectedSourceId(parsed.selectedSourceId || null);
+              setMetafieldMappings(parsed.metafieldMappings || {});
             }
           }
         }
@@ -492,7 +514,47 @@ export default function Index() {
   }, []);
 
   const handleSelectProfile = (id: string | null) => {
+    // 1. Save current session to the previous key
+    const prevKey = selectedProfileId 
+      ? `ingest_ai_session_${selectedProfileId}` 
+      : "ingest_ai_session_global";
+    const currentSession = { queuedSources, crawlResult, customCollections, selectedSourceId, metafieldMappings };
+    localStorage.setItem(prevKey, JSON.stringify(currentSession));
+
+    // 2. Switch selectedProfileId
     setSelectedProfileId(id);
+
+    // 3. Load from new key
+    const newKey = id 
+      ? `ingest_ai_session_${id}` 
+      : "ingest_ai_session_global";
+    
+    const saved = localStorage.getItem(newKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const resetSources = (parsed.queuedSources || []).map((s: any) => {
+          if (s.status === "converting") return { ...s, status: "queued" };
+          if (s.status === "publishing") return { ...s, status: "ready" };
+          return s;
+        });
+        setQueuedSources(resetSources);
+        setCrawlResult(parsed.crawlResult || null);
+        setCustomCollections(parsed.customCollections || []);
+        setSelectedSourceId(parsed.selectedSourceId || null);
+        setMetafieldMappings(parsed.metafieldMappings || {});
+      } catch (e) {
+        console.error("Failed to parse saved session", e);
+      }
+    } else {
+      setQueuedSources([]);
+      setCrawlResult(null);
+      setCustomCollections([]);
+      setSelectedSourceId(null);
+      setMetafieldMappings({});
+    }
+
+    // 4. Update inputs based on the selected profile
     if (id) {
       const profile = profiles.find(p => p.id === id);
       if (profile) {
@@ -504,6 +566,53 @@ export default function Index() {
       setCrawlUrlInput("");
       setCustomProductPattern("");
       setCustomCategoryPattern("");
+    }
+  };
+
+  const handleCreateMetafieldDefinition = async (attrName: string) => {
+    const cleanAttr = attrName.trim();
+    const key = cleanAttr
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "_")
+      .replace(/__+/g, "_")
+      .replace(/^_+|_+$/g, "");
+      
+    const activeProfile = profiles.find(p => p.id === selectedProfileId);
+    let platform = "Shopify";
+    if (activeProfile) {
+      if (activeProfile.categoryPattern.includes("product-category") || activeProfile.rootUrl.includes("woocommerce")) {
+        platform = "WooCommerce";
+      }
+    }
+    const finalKey = platform === "WooCommerce" ? `pa_${key}` : key;
+
+    setIsCreatingMetafield(prev => ({ ...prev, [attrName]: true }));
+    try {
+      const res = await fetch("/api/metafields", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: cleanAttr,
+          namespace: "custom",
+          key: finalKey,
+          type: "single_line_text_field",
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.definition) {
+        setExistingMetafields(prev => [...prev, data.definition]);
+        setMetafieldMappings(prev => ({
+          ...prev,
+          [attrName]: `${data.definition.namespace}.${data.definition.key}`,
+        }));
+        shopify.toast.show(`Created metafield definition custom.${finalKey}`);
+      } else {
+        shopify.toast.show(`Error: ${data.error || "Failed to create metafield"}`);
+      }
+    } catch (err: any) {
+      shopify.toast.show(`Network error: ${err.message}`);
+    } finally {
+      setIsCreatingMetafield(prev => ({ ...prev, [attrName]: false }));
     }
   };
 
@@ -1624,6 +1733,7 @@ export default function Index() {
         overwriteDescription: reviewOverwriteDescription,
         overwriteVariants: reviewOverwriteVariants,
         collections: queuedSources.find(s => s.id === selectedSourceId)?.collections || [],
+        metafieldMappings,
       };
       
       const res = await fetch("/api/publish", {
@@ -1713,7 +1823,8 @@ export default function Index() {
              overwriteDescription: nextReady.overwriteOptions?.description ?? true,
              overwriteVariants: nextReady.overwriteOptions?.variants ?? true,
              collections: nextReady.collections || productData.collections || [],
-             vendor: productData.vendor
+             vendor: productData.vendor,
+             metafieldMappings,
            };
 
            const pubRes = await fetch("/api/publish", {
@@ -1747,10 +1858,10 @@ export default function Index() {
       const activeKey = selectedProfileId 
         ? `ingest_ai_session_${selectedProfileId}` 
         : "ingest_ai_session_global";
-      const session = { queuedSources, crawlResult, customCollections, selectedSourceId };
+      const session = { queuedSources, crawlResult, customCollections, selectedSourceId, metafieldMappings };
       localStorage.setItem(activeKey, JSON.stringify(session));
     }
-  }, [queuedSources, crawlResult, customCollections, selectedSourceId, isSessionLoaded, selectedProfileId]);
+  }, [queuedSources, crawlResult, customCollections, selectedSourceId, metafieldMappings, isSessionLoaded, selectedProfileId]);
 
   useEffect(() => {
     if (!isProcessingQueue) return;
@@ -2289,11 +2400,11 @@ export default function Index() {
                     <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "10px" }}>
                       <div>
                         <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
-                          Profile Name (e.g. Outre Hair Vendor)
+                          Profile Name (e.g. Acme Electronics)
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. Outre Hair Vendor"
+                          placeholder="e.g. Acme Electronics"
                           value={profileNameInput}
                           onChange={(e) => setProfileNameInput(e.target.value)}
                           style={{
@@ -2313,7 +2424,7 @@ export default function Index() {
                         </label>
                         <input
                           type="url"
-                          placeholder="https://www.outre.com/"
+                          placeholder="https://www.acme-electronics.com/"
                           value={profileRootUrlInput}
                           onChange={(e) => setProfileRootUrlInput(e.target.value)}
                           style={{
@@ -2333,7 +2444,7 @@ export default function Index() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. /product-category/braids or /collections/hair"
+                          placeholder="e.g. /product-category/smartphones or /collections/headphones"
                           value={profileCategoryPatternInput}
                           onChange={(e) => setProfileCategoryPatternInput(e.target.value)}
                           style={{
@@ -2352,7 +2463,7 @@ export default function Index() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. /product/type-4-soft-natural or /products/item"
+                          placeholder="e.g. /product/wireless-earbuds-pro or /products/item"
                           value={profileProductPatternInput}
                           onChange={(e) => setProfileProductPatternInput(e.target.value)}
                           style={{
@@ -2365,6 +2476,57 @@ export default function Index() {
                           }}
                         />
                       </div>
+                      
+                      {/* Website Platform Quick Reference Guide */}
+                      <details style={{ marginTop: "10px", background: "#f6f6f7", padding: "12px", borderRadius: "6px", border: "1px solid #e1e3e5" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "13px", color: "#008060", fontWeight: 500, outline: "none", userSelect: "none" }}>
+                          💡 Website Platform Quick Reference Guide (Slug Identification)
+                        </summary>
+                        <div style={{ marginTop: "10px", overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", textAlign: "left" }}>
+                            <thead>
+                              <tr style={{ borderBottom: "2px solid #e1e3e5", color: "#202223" }}>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Platform</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Pattern Type</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Category Marker</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Product Marker</th>
+                                <th style={{ padding: "6px 8px", fontWeight: 600 }}>Note for Scraper Agent</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {[
+                                { name: "Shopify", type: "Fixed", cat: "/collections/", prod: "/products/", note: "Standardized. Highly predictable." },
+                                { name: "WooCommerce", type: "CMS", cat: "/product-category/", prod: "/product/", note: "Paths often customizable via SEO plugins." },
+                                { name: "Magento 2", type: "Flexible", cat: "/category/", prod: "/product/", note: "Heavy use of rewrites. Watch for query params." },
+                                { name: "BigCommerce", type: "Fixed", cat: "/categories/", prod: "/products/", note: "Very similar to Shopify, slightly different slugs." },
+                                { name: "PrestaShop", type: "Short", cat: "/c/", prod: "/p/", note: "Compact paths; watch for ID-based URL appending." },
+                                { name: "Squarespace", type: "CMS", cat: "/category/", prod: "/p/", note: "Often uses /shop/ or /p/ as a base." },
+                                { name: "Wix", type: "Hybrid", cat: "/category/", prod: "/product-page/", note: "Unique dynamic rendering; requires JS wait." },
+                                { name: "OpenCart", type: "Legacy", cat: "/category/", prod: "/product/", note: "Often retains query string fallbacks." },
+                                { name: "Volusion", type: "Fixed", cat: "/c/", prod: "/product/", note: "Rigid; limited slug customization." },
+                                { name: "Zen Cart", type: "Query", cat: "?cPath=", prod: "?products_id=", note: "Non-RESTful. Must parse URL query strings." },
+                                { name: "MedusaJS", type: "Headless", cat: "/collections/", prod: "/products/", note: "API-first; structure is often 'Shopify-like'." },
+                                { name: "Saleor", type: "Headless", cat: "/category/", prod: "/product/", note: "GraphQL-driven; structure depends on frontend." },
+                                { name: "Shopline", type: "Fixed", cat: "/collections/", prod: "/products/", note: "Asian market leader; follows Shopify logic." },
+                                { name: "Nuvemshop", type: "Fixed", cat: "/c/", prod: "/p/", note: "Latin American focus; compact slug style." },
+                                { name: "CS-Cart", type: "Hybrid", cat: "/category/", prod: "/product/", note: "Can switch between SEO-friendly and IDs." },
+                                { name: "X-Cart", type: "Flexible", cat: "/category/", prod: "/p/", note: "SEO settings allow custom path prefixes." },
+                                { name: "Sylius", type: "Headless", cat: "/category/", prod: "/product/", note: "Symfony-based; typically clean REST paths." },
+                                { name: "Drupal Commerce", type: "CMS", cat: "/category/", prod: "/product/", note: "Deeply nested taxonomy possible." }
+                              ].map((row, index) => (
+                                <tr key={row.name} style={{ borderBottom: "1px solid #e1e3e5", background: index % 2 === 0 ? "#f9fafb" : "white" }}>
+                                  <td style={{ padding: "6px 8px", fontWeight: 500, color: "#202223" }}>{row.name}</td>
+                                  <td style={{ padding: "6px 8px", color: "#6d7175" }}>{row.type}</td>
+                                  <td style={{ padding: "6px 8px" }}><code>{row.cat}</code></td>
+                                  <td style={{ padding: "6px 8px" }}><code>{row.prod}</code></td>
+                                  <td style={{ padding: "6px 8px", color: "#5c5f62" }}>{row.note}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+
                       <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
                         <s-button variant="primary" disabled={isSavingProfile} onClick={handleSaveProfile}>
                           {isSavingProfile ? "Saving..." : "Save Profile"}
@@ -2458,7 +2620,7 @@ export default function Index() {
                             <div style={{ display: "flex", gap: "10px" }}>
                               <input
                                 type="url"
-                                placeholder="e.g. https://www.outre.com/product-category/braids"
+                                placeholder="e.g. https://www.acme-electronics.com/collections/smartphones"
                                 value={crawlUrlInput}
                                 onChange={(e) => setCrawlUrlInput(e.target.value)}
                                 style={{
@@ -2894,8 +3056,139 @@ export default function Index() {
                   </div>
                 )}
 
+                {/* Metafields & Attributes Mapping Panel */}
+                <div style={{
+                  background: "white",
+                  padding: "16px",
+                  borderRadius: "8px",
+                  border: "1px solid #e1e3e5",
+                  marginTop: "15px",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+                }}>
+                  <h3 style={{ fontSize: "15px", fontWeight: 600, margin: "0 0 4px 0", color: "#202223" }}>
+                    🏷️ Shopify Metafields & Attributes Mapping
+                  </h3>
+                  <p style={{ fontSize: "13px", color: "#5c5f62", margin: "0 0 12px 0" }}>
+                    Map discovered custom specifications to Shopify Product Metafield definitions. Undefined or skipped attributes will not be published.
+                  </p>
+                  
+                  {(() => {
+                    const uniqueSpecs = new Set<string>();
+                    crawlResult.categories.forEach((cat: any) => {
+                      if (cat.products) {
+                        cat.products.forEach((p: any) => {
+                          if (p.specifications) {
+                            p.specifications.forEach((s: any) => {
+                              if (s.name) uniqueSpecs.add(s.name.trim());
+                            });
+                          }
+                        });
+                      }
+                    });
+                    
+                    const specList = Array.from(uniqueSpecs);
+                    
+                    if (specList.length === 0) {
+                      return (
+                        <div style={{ fontSize: "13px", color: "#6d7175", fontStyle: "italic" }}>
+                          No custom specification attributes detected in this crawl session.
+                        </div>
+                      );
+                    }
+                    
+                    return (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", textAlign: "left" }}>
+                          <thead>
+                            <tr style={{ borderBottom: "2px solid #e1e3e5", color: "#202223" }}>
+                              <th style={{ padding: "8px", fontWeight: 600 }}>Discovered Attribute</th>
+                              <th style={{ padding: "8px", fontWeight: 600 }}>Shopify Metafield Target</th>
+                              <th style={{ padding: "8px", fontWeight: 600, textAlign: "right" }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {specList.map((specName) => {
+                              const currentMap = metafieldMappings[specName] || "skip";
+                              const isCreating = isCreatingMetafield[specName] || false;
+                              
+                              const cleanAttr = specName.trim();
+                              const slug = cleanAttr
+                                .toLowerCase()
+                                .replace(/[^a-z0-9_]/g, "_")
+                                .replace(/__+/g, "_")
+                                .replace(/^_+|_+$/g, "");
+                              
+                              const activeProfile = profiles.find(p => p.id === selectedProfileId);
+                              let platform = "Shopify";
+                              if (activeProfile) {
+                                if (activeProfile.categoryPattern.includes("product-category") || activeProfile.rootUrl.includes("woocommerce")) {
+                                  platform = "WooCommerce";
+                                }
+                              }
+                              const finalKey = platform === "WooCommerce" ? `pa_${slug}` : slug;
+                              
+                              return (
+                                <tr key={specName} style={{ borderBottom: "1px solid #f4f6f8" }}>
+                                  <td style={{ padding: "8px", fontWeight: 500, color: "#202223" }}>{specName}</td>
+                                  <td style={{ padding: "8px" }}>
+                                    <select
+                                      value={currentMap}
+                                      onChange={(e) => setMetafieldMappings(prev => ({ ...prev, [specName]: e.target.value }))}
+                                      style={{
+                                        padding: "6px 10px",
+                                        borderRadius: "6px",
+                                        border: "1px solid #ccc",
+                                        fontSize: "13px",
+                                        background: "white",
+                                        cursor: "pointer",
+                                        width: "100%",
+                                        maxWidth: "280px"
+                                      }}
+                                    >
+                                      <option value="skip">⚠️ Skip / Exclude Attribute</option>
+                                      <optgroup label="Auto-Create Definition">
+                                        <option value={`new:custom.${finalKey}`}>
+                                          🆕 Create custom.{finalKey} (Approved by user)
+                                        </option>
+                                      </optgroup>
+                                      {existingMetafields.length > 0 && (
+                                        <optgroup label="Map to Existing Shopify Metafields">
+                                          {existingMetafields.map((def) => (
+                                            <option key={def.id} value={`${def.namespace}.${def.key}`}>
+                                              📁 {def.namespace}.{def.key} ({def.name})
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      )}
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: "8px", textAlign: "right" }}>
+                                    {currentMap.startsWith("new:") ? (
+                                      <s-button
+                                        variant="primary"
+                                        disabled={isCreating}
+                                        onClick={() => handleCreateMetafieldDefinition(specName)}
+                                      >
+                                        {isCreating ? "Creating..." : "Approve & Create"}
+                                      </s-button>
+                                    ) : (
+                                      <span style={{ fontSize: "12px", color: currentMap === "skip" ? "#8c9196" : "#008060" }}>
+                                        {currentMap === "skip" ? "Excluded" : "✓ Mapped"}
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+
                 {/* Collapsible Category Tree */}
-                <h3 style={{ fontSize: "16px", fontWeight: 600, margin: "10px 0 4px 0", color: "#202223" }}>Discovered Categories & Products</h3>
+                <h3 style={{ fontSize: "16px", fontWeight: 600, margin: "20px 0 4px 0", color: "#202223" }}>Discovered Categories & Products</h3>
                 <p style={{ fontSize: "14px", color: "#5c5f62", margin: "0 0 12px 0" }}>Select which categories or specific products to scrape and queue:</p>
 
                 {/* Grouping Toggle Option */}

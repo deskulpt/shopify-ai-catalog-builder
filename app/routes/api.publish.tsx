@@ -19,6 +19,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       price_unit,
       vendor,
       specifications = [],
+      metafieldMappings = {},
       variants = [],
       options = [],
       media_links = [],
@@ -487,6 +488,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         value: purchase_type || "direct_buy",
       },
     ];
+
+    // Process custom specifications mappings to Shopify metafields
+    if (specifications && specifications.length > 0 && metafieldMappings) {
+      specifications.forEach((spec: any) => {
+        const targetMetafield = metafieldMappings[spec.name];
+        if (targetMetafield && targetMetafield !== "skip") {
+          const parts = targetMetafield.split(".");
+          if (parts.length === 2) {
+            const [ns, ky] = parts;
+            if (!metafieldsVar.some(m => m.namespace === ns && m.key === ky)) {
+              metafieldsVar.push({
+                ownerId: productId,
+                namespace: ns,
+                key: ky,
+                type: "single_line_text_field",
+                value: String(spec.value),
+              });
+            }
+          }
+        }
+      });
+    }
 
     if (sourceUrl) {
       metafieldsVar.push({

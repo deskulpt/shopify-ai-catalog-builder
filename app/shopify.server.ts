@@ -27,7 +27,20 @@ const shopify = shopifyApp({
 export default shopify;
 export const apiVersion = ApiVersion.October25;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
-export const authenticate = shopify.authenticate;
+let mockAuthenticate: any = null;
+export function setMockAuthenticate(mock: any) {
+  mockAuthenticate = mock;
+}
+
+export const authenticate = {
+  ...shopify.authenticate,
+  admin: async (request: Request) => {
+    if (mockAuthenticate) {
+      return mockAuthenticate(request);
+    }
+    return shopify.authenticate.admin(request);
+  }
+};
 export const unauthenticated = shopify.unauthenticated;
 export const login = shopify.login;
 export const registerWebhooks = shopify.registerWebhooks;
