@@ -2400,11 +2400,11 @@ export default function Index() {
                     <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "10px" }}>
                       <div>
                         <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
-                          Profile Name (e.g. Outre Hair Vendor)
+                          Profile Name (e.g. Acme Electronics)
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. Outre Hair Vendor"
+                          placeholder="e.g. Acme Electronics"
                           value={profileNameInput}
                           onChange={(e) => setProfileNameInput(e.target.value)}
                           style={{
@@ -2424,7 +2424,7 @@ export default function Index() {
                         </label>
                         <input
                           type="url"
-                          placeholder="https://www.outre.com/"
+                          placeholder="https://www.acme-electronics.com/"
                           value={profileRootUrlInput}
                           onChange={(e) => setProfileRootUrlInput(e.target.value)}
                           style={{
@@ -2444,7 +2444,7 @@ export default function Index() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. /product-category/braids or /collections/hair"
+                          placeholder="e.g. /product-category/smartphones or /collections/headphones"
                           value={profileCategoryPatternInput}
                           onChange={(e) => setProfileCategoryPatternInput(e.target.value)}
                           style={{
@@ -2463,7 +2463,7 @@ export default function Index() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. /product/type-4-soft-natural or /products/item"
+                          placeholder="e.g. /product/wireless-earbuds-pro or /products/item"
                           value={profileProductPatternInput}
                           onChange={(e) => setProfileProductPatternInput(e.target.value)}
                           style={{
@@ -2620,7 +2620,7 @@ export default function Index() {
                             <div style={{ display: "flex", gap: "10px" }}>
                               <input
                                 type="url"
-                                placeholder="e.g. https://www.outre.com/product-category/braids"
+                                placeholder="e.g. https://www.acme-electronics.com/collections/smartphones"
                                 value={crawlUrlInput}
                                 onChange={(e) => setCrawlUrlInput(e.target.value)}
                                 style={{
