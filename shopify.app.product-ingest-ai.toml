@@ -70,3 +70,6 @@ required = true
 [metaobjects.app.example.fields.description]
 name = "Description"
 type = "multi_line_text_field"
+
+[build]
+automatically_update_urls_on_dev = true
