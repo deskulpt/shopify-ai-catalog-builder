@@ -1714,29 +1714,80 @@ def detect_and_split_multi_products(markdown, url=None, domain=None):
     return None
 
 def is_login_page_markdown(markdown: str) -> bool:
-    """Inspect markdown to detect if it is a B2B portal login or auth page"""
+    """Detect if markdown is primarily a login/auth gate page.
+    
+    Avoids false positives for product pages that include a WooCommerce
+    footer login widget (e.g. outre.com) by checking content ratio and position.
+    """
     if not markdown:
         return False
     lower_md = markdown.lower()
+    total_len = len(lower_md)
+    
+    # Very short pages with login content are almost certainly gates
+    if total_len < 800:
+        login_patterns = [
+            r"username or email address",
+            r"password\s*\*",
+            r"log in",
+            r"forgot password",
+        ]
+        matches = sum(1 for p in login_patterns if re.search(p, lower_md))
+        return matches >= 2
+    
+    # For longer pages, only flag as login gate if the login content appears
+    # EARLY (in the first 40% of the document) AND product indicators are absent
     login_patterns = [
-        r"lost your password\?",
-        r"lost password",
-        r"username or email address",
-        r"remember me",
-        r"forgot password",
-        r"b2b portal",
-        r"log in to your account",
-        r"password\s*\*"
+        (r"lost your password\?", 3),
+        (r"lost password", 2),
+        (r"username or email address", 3),
+        (r"remember me", 1),
+        (r"forgot password", 2),
+        (r"b2b portal", 3),
+        (r"log in to your account", 3),
+        (r"password\s*\*", 2),
     ]
-    matches = 0
-    for pattern in login_patterns:
-        if re.search(pattern, lower_md):
-            matches += 1
-    if matches >= 2:
+    
+    score = 0
+    first_login_pos = total_len  # track where login content starts
+    for pattern, weight in login_patterns:
+        m = re.search(pattern, lower_md)
+        if m:
+            score += weight
+            first_login_pos = min(first_login_pos, m.start())
+    
+    # Product content signals that this is NOT a pure login gate
+    product_signals = [
+        r"add to cart",
+        r"product description",
+        r"specifications",
+        r"\$\s*\d+",
+        r"price[:\s]",
+        r"buy now",
+        r"in stock",
+        r"hair material",
+        r"available colors",
+        r"product title",  # JSON-LD
+        r"json-ld",
+    ]
+    product_score = sum(1 for p in product_signals if re.search(p, lower_md))
+    
+    # Only flag as login gate if:
+    # 1. Login signals are strong (score >= 6)
+    # 2. AND login content appears early (first 35% of page)
+    # 3. AND no significant product signals found
+    early_threshold = int(total_len * 0.35)
+    is_early_login = first_login_pos < early_threshold
+    
+    if score >= 6 and is_early_login and product_score == 0:
         return True
-    if "lost your password" in lower_md and "log in" in lower_md:
+    
+    # Legacy: very strong login score with zero product signals on any size page
+    if score >= 9 and product_score == 0:
         return True
+        
     return False
+
 
 def load_backup_prompt():
     """Load the prompt template from Agent-backup-oneshot.md if available, or fall back to default"""
