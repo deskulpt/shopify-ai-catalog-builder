@@ -366,6 +366,119 @@ def test_matches_category_segments():
     
     print("Local matches_category_segments unit tests passed successfully!")
 
+def test_download_and_hash_asset():
+    """Unit test for download_and_hash_asset helper - uses a real, small, public image"""
+    from markitdown_service import download_and_hash_asset
+    import os, hashlib
+
+    # Use a tiny real public image for download test
+    test_url = "https://httpbin.org/image/png"
+    result = download_and_hash_asset(test_url)
+
+    assert result.get("success") is True, f"Expected success=True, got: {result}"
+    assert "sha256" in result, "Expected sha256 in result"
+    assert "local_url" in result, "Expected local_url in result"
+    assert result["local_url"].startswith("/public/extracted/"), f"Expected /public/extracted/ path, got: {result['local_url']}"
+
+    # Verify file was actually written to disk
+    public_extracted = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "public", "extracted"
+    )
+    filename = result["local_url"].replace("/public/extracted/", "")
+    disk_path = os.path.join(public_extracted, filename)
+    assert os.path.exists(disk_path), f"Expected file on disk at: {disk_path}"
+
+    # Verify deduplication - a second call must not re-download
+    import time
+    t_before = os.path.getmtime(disk_path)
+    time.sleep(0.1)
+    result2 = download_and_hash_asset(test_url)
+    t_after = os.path.getmtime(disk_path)
+    assert t_before == t_after, "File was re-downloaded instead of being deduplicated!"
+    assert result2["sha256"] == result["sha256"], "SHA256 must be identical for same content"
+
+    print("download_and_hash_asset test passed successfully!")
+
+
+def test_new_schema_mapping_in_extract():
+    """Test that /extract correctly maps the new {product, assets, source} schema to flat layout"""
+    url = "http://localhost:5005/extract"
+
+    # Minimal markdown that looks like a product page
+    markdown = """## A+ Ocean Deep
+
+HAIR MATERIAL: PREMIUM MIX
+TEXTURE: SILKY
+STYLE: WAVY
+COLOR SHOWN: 4
+AVAILABLE COLORS: 1,1B,2,27,30,4
+LENGTHS: 18" 24"
+
+Price: $25.99
+
+![Product Front View](https://cdn.outre.com/a-ocean-deep-front.jpg)
+![Product Back View](https://cdn.outre.com/a-ocean-deep-back.jpg)
+"""
+    payload = {
+        "markdown": markdown,
+        "domain": "outre.com",
+        "url": "https://www.outre.com/product/a-ocean-deep/"
+    }
+
+    response = requests.post(url, json=payload)
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    data = response.json()
+    assert data.get("success") is True, f"Expected success=True: {data}"
+
+    # Verify backward-compatible flat layout is always present
+    assert "title" in data, "Expected 'title' in response"
+    assert "media_links" in data, "Expected 'media_links' in response"
+    assert "file_links" in data, "Expected 'file_links' in response"
+    assert "assets" in data, "Expected 'assets' manifest in response"
+
+    # Title should have been extracted (AI path: specific title; rule-based: may be generic)
+    title = data.get("title", "")
+    assert title, f"Expected non-empty title, got: '{title}'"
+
+    print(f"New schema mapping test passed. Title: {title}, Assets: {len(data['assets'])}, Media: {len(data['media_links'])}")
+
+
+def test_asset_manifest_excludes_unrelated_products():
+    """Assets from 'YOU MAY ALSO LIKE' sections must not be in the manifest"""
+    url = "http://localhost:5005/extract"
+    markdown = """## VG-5HP Industrial Pump
+
+Heavy-duty 5HP pump for industrial use.
+
+Price: $350.00
+
+![VG-5HP Product Image](https://pumps.com/images/vg-5hp-front.jpg)
+
+### YOU MAY ALSO LIKE
+
+[![Other Pump A](https://pumps.com/images/other-pump-a.jpg)](https://pumps.com/product/other-pump-a/)
+[![Other Pump B](https://pumps.com/images/other-pump-b.jpg)](https://pumps.com/product/other-pump-b/)
+"""
+    payload = {
+        "markdown": markdown,
+        "domain": "pumps.com",
+        "url": "https://pumps.com/product/vg-5hp/"
+    }
+
+    response = requests.post(url, json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data.get("success") is True
+
+    # All assets must belong to the main product - none should be "other-pump"
+    all_srcs = [a.get("src", "") for a in data.get("assets", [])]
+    for src in all_srcs:
+        assert "other-pump" not in src, f"Found unrelated product asset in manifest: {src}"
+
+    print("Asset manifest exclusion test passed - no related product assets contaminated output.")
+
+
 if __name__ == "__main__":
     print("Running crawler and extraction tests...")
     test_classify_url()
@@ -380,4 +493,7 @@ if __name__ == "__main__":
     test_resolve_pdf_viewer_url()
     test_pdf_image_extraction()
     test_html_viewer_extraction()
+    test_download_and_hash_asset()
+    test_new_schema_mapping_in_extract()
+    test_asset_manifest_excludes_unrelated_products()
     print("All tests passed!")

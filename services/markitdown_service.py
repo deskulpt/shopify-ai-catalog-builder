@@ -10,6 +10,8 @@ import re
 from bs4 import BeautifulSoup
 import uuid
 from pypdf import PdfReader
+import hashlib
+import mimetypes
 
 # Add services dir to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -508,6 +510,98 @@ def preprocess_html_content(html_bytes):
         pass
     return html_bytes
 
+def extract_json_ld_product_markdown(html_bytes: bytes) -> str:
+    """Parse HTML to find and format JSON-LD Product schema as Markdown"""
+    try:
+        soup = BeautifulSoup(html_bytes, "html.parser")
+        ld_scripts = soup.find_all("script", type="application/ld+json")
+        for script in ld_scripts:
+            if not script.string:
+                continue
+            try:
+                data = json.loads(script.string)
+                items = []
+                if isinstance(data, dict):
+                    if "@graph" in data:
+                        items = data["@graph"]
+                    else:
+                        items = [data]
+                elif isinstance(data, list):
+                    items = data
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    itm_type = str(item.get("@type", ""))
+                    if "Product" in itm_type or "ItemPage" in itm_type or "WebPage" in itm_type:
+                        name = item.get("name")
+                        desc = item.get("description")
+                        image_url = ""
+                        img = item.get("image")
+                        if isinstance(img, dict):
+                            image_url = img.get("url", "")
+                        elif isinstance(img, str):
+                            image_url = img
+                        elif isinstance(img, list) and img:
+                            if isinstance(img[0], dict):
+                                image_url = img[0].get("url", "")
+                            else:
+                                image_url = str(img[0])
+                        offers = item.get("offers")
+                        price = ""
+                        currency = ""
+                        if isinstance(offers, dict):
+                            price = offers.get("price", "")
+                            currency = offers.get("priceCurrency", "")
+                        elif isinstance(offers, list) and offers:
+                            price = offers[0].get("price", "")
+                            currency = offers[0].get("priceCurrency", "")
+                        if name:
+                            md_lines = ["\n\n## Discovered Product Metadata (JSON-LD)"]
+                            md_lines.append(f"- **Product Title**: {name}")
+                            if desc:
+                                md_lines.append(f"- **Description**: {desc}")
+                            if image_url:
+                                md_lines.append(f"- **Primary Image**: {image_url}")
+                            if price:
+                                md_lines.append(f"- **Price**: {price} {currency}".strip())
+                            return "\n".join(md_lines) + "\n"
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ""
+
+def fetch_woocommerce_store_api_fallback(url: str) -> str:
+    """Fetch product details from WooCommerce Store API as fallback"""
+    try:
+        parsed_url = urllib.parse.urlparse(url)
+        path_parts = [p for p in parsed_url.path.split('/') if p]
+        if not path_parts:
+            return ""
+        slug = path_parts[-1].replace('-', ' ')
+        api_url = f"{parsed_url.scheme}://{parsed_url.netloc}/wp-json/wc/store/products?search={slug}"
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        r = http.get(api_url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            products = r.json()
+            if isinstance(products, list) and products:
+                p = products[0]
+                md_lines = ["\n\n## Discovered Product Details (WooCommerce Store API)"]
+                md_lines.append(f"- **Product Title**: {p.get('name')}")
+                if p.get('sku'):
+                    md_lines.append(f"- **SKU**: {p.get('sku')}")
+                if p.get('description'):
+                    soup_desc = BeautifulSoup(p.get('description'), "html.parser")
+                    md_lines.append(f"- **Description**: {soup_desc.get_text().strip()}")
+                if p.get('images') and isinstance(p['images'], list):
+                    md_lines.append(f"- **Primary Image**: {p['images'][0].get('src')}")
+                    for img in p['images'][1:]:
+                        md_lines.append(f"- **Additional Image**: {img.get('src')}")
+                return "\n".join(md_lines) + "\n"
+    except Exception:
+        pass
+    return ""
+
 @app.route('/convert-url', methods=['POST'])
 def convert_url():
     """Convert URL content to Markdown"""
@@ -570,6 +664,16 @@ def convert_url():
         
         result = md.convert(tmp_path)
         markdown = result.text_content
+        
+        if suffix.lower() == '.html':
+            # Append JSON-LD schema metadata
+            json_ld_md = extract_json_ld_product_markdown(html_content)
+            if json_ld_md:
+                markdown += json_ld_md
+            # Append WooCommerce API fallback
+            wc_api_md = fetch_woocommerce_store_api_fallback(url)
+            if wc_api_md:
+                markdown += wc_api_md
         
         if suffix.lower() == '.pdf':
             parsed_u = urllib.parse.urlparse(url)
@@ -1609,6 +1713,163 @@ def detect_and_split_multi_products(markdown, url=None, domain=None):
         return products
     return None
 
+def is_login_page_markdown(markdown: str) -> bool:
+    """Inspect markdown to detect if it is a B2B portal login or auth page"""
+    if not markdown:
+        return False
+    lower_md = markdown.lower()
+    login_patterns = [
+        r"lost your password\?",
+        r"lost password",
+        r"username or email address",
+        r"remember me",
+        r"forgot password",
+        r"b2b portal",
+        r"log in to your account",
+        r"password\s*\*"
+    ]
+    matches = 0
+    for pattern in login_patterns:
+        if re.search(pattern, lower_md):
+            matches += 1
+    if matches >= 2:
+        return True
+    if "lost your password" in lower_md and "log in" in lower_md:
+        return True
+    return False
+
+def load_backup_prompt():
+    """Load the prompt template from Agent-backup-oneshot.md if available, or fall back to default"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        prompt_path = os.path.join(project_root, ".planning", "phases", "Agent-backup-oneshot.md")
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    return """You are an e-commerce product extraction engine.
+Your task is to scan a single product detail page and return a Shopify-ready product object plus a downloadable asset manifest for Python.
+Return JSON only. No markdown. No explanation. No comments.
+
+RETURN THIS EXACT SHAPE:
+{
+  "product": {
+    "handle": "",
+    "title": "",
+    "body_html": "",
+    "vendor": "",
+    "product_type": "",
+    "tags": [],
+    "status": "active",
+    "options": [],
+    "variants": [],
+    "metafields": [],
+    "seo": {
+      "title": "",
+      "description": ""
+    }
+  },
+  "assets": [
+    {
+      "type": "image",
+      "role": "gallery",
+      "src": "",
+      "title": "",
+      "filename": "",
+      "mime_type": "",
+      "download": {
+        "method": "direct",
+        "headers": {},
+        "referer_required": false
+      }
+    }
+  ],
+  "source": {
+    "url": "",
+    "breadcrumb": [],
+    "raw_attributes": {}
+  }
+}
+"""
+
+def extract_with_gemini(prompt: str) -> dict:
+    """Call Google Gemini REST API to extract product data using the unified prompt"""
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError("No Gemini/Google API key found in environment.")
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": prompt
+            }]
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.0
+        }
+    }
+    
+    response = http.post(url, json=payload, headers=headers, timeout=45)
+    response.raise_for_status()
+    
+    resp_json = response.json()
+    try:
+        text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(text)
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ValueError(f"Failed to parse Gemini response: {e}. Raw response: {resp_json}")
+
+def download_and_hash_asset(asset_url: str, headers: dict = None) -> dict:
+    """Download asset, compute hash, and save locally in public/extracted"""
+    try:
+        req_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        if headers:
+            req_headers.update(headers)
+            
+        r = http.get(asset_url, headers=req_headers, timeout=30, stream=True)
+        if r.status_code != 200:
+            return {"error": f"HTTP {r.status_code}"}
+            
+        content = r.content
+        sha256_hash = hashlib.sha256(content).hexdigest()
+        
+        # Determine extension
+        content_type = r.headers.get("content-type", "")
+        ext = mimetypes.guess_extension(content_type.split(';')[0])
+        if not ext:
+            parsed_u = urllib.parse.urlparse(asset_url)
+            _, ext = os.path.splitext(parsed_u.path)
+            if '?' in ext:
+                ext = ext.split('?')[0]
+            if '#' in ext:
+                ext = ext.split('#')[0]
+        if not ext:
+            ext = ".bin"
+            
+        filename = f"{sha256_hash}{ext}"
+        local_path = os.path.join(PUBLIC_EXTRACTED_DIR, filename)
+        
+        # Save to disk if it doesn't already exist
+        if not os.path.exists(local_path):
+            with open(local_path, "wb") as f:
+                f.write(content)
+                
+        return {
+            "success": True,
+            "local_url": f"/public/extracted/{filename}",
+            "sha256": sha256_hash,
+            "mime_type": content_type.split(';')[0] or mimetypes.types_map.get(ext, "application/octet-stream")
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.route('/extract', methods=['POST'])
 def extract_product():
     """Extract structured product fields from Markdown content"""
@@ -1619,6 +1880,11 @@ def extract_product():
     
     if not markdown:
         return jsonify({'error': 'No Markdown content provided'}), 400
+        
+    if is_login_page_markdown(markdown):
+        return jsonify({
+            'error': 'Access Gated: The URL redirected to a login page or authentication portal. Product details cannot be crawled without authorization.'
+        }), 400
         
     # Check if there are multiple products on the page first
     split_products = detect_and_split_multi_products(markdown, url, domain)
@@ -1635,61 +1901,156 @@ def extract_product():
         
     # Single product flow
     openai_key = os.environ.get("OPENAI_API_KEY")
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     result = None
+    
+    # Load unified prompt template from Agent-backup-oneshot.md
+    raw_prompt = load_backup_prompt()
+    unified_prompt = raw_prompt + f"\n\nPage URL: {url}\n\nPage Markdown Document:\n{markdown}"
+    
+    # Try OpenAI first
     if openai_key:
         try:
             from openai import OpenAI
             client = OpenAI(api_key=openai_key)
-            prompt = f"""
-            Extract structured product fields from the following markdown document.
-            Return a JSON object matching this schema:
-            {{
-                "title": "Product Title",
-                "sku": "SKU code or null",
-                "price": "Price value as a string (e.g. 22.00) or null",
-                "currency": "Standard currency code (e.g. USD, INR, GBP, CAD, EUR) or null",
-                "price_unit": "The unit corresponding to the price (e.g. Piece, Meter, Kg) or null",
-                "purchase_type": "direct_buy" or "quote_only",
-                "vendor": "Manufacturer name, brand, or null if not found",
-                "short_description": "The full product description in Markdown format, but EXCLUDING any manufacturer contact details, emails, phones, or brand promotional boilerplate.",
-                "specifications": [
-                    {{
-                        "name": "Specification Name (e.g. Weight, Voltage, Material)",
-                        "rawValue": "Original text value (e.g. 25KG, 24V DC)"
-                    }}
-                ],
-                "media_links": [
-                    {{
-                        "url": "Image URL",
-                        "alt": "Alt text or empty string"
-                    }}
-                ],
-                "file_links": [
-                    {{
-                        "url": "Document/PDF file URL",
-                        "text": "Link text description"
-                    }}
-                ]
-            }}
-            
-            Markdown:
-            {markdown}
-            """
-            
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": unified_prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.0
             )
-            
             result = json.loads(response.choices[0].message.content)
+        except Exception:
+            pass
             
-            result["price"] = result.get("price") or "0.00"
-            result["currency"] = result.get("currency") or "USD"
-            result["price_unit"] = result.get("price_unit") or None
-            result["vendor"] = result.get("vendor") or None
+    # Try Gemini backup call if OpenAI failed or is not available
+    if not result and gemini_key:
+        try:
+            result = extract_with_gemini(unified_prompt)
+        except Exception:
+            pass
             
+    # Parse and normalize results
+    if result:
+        try:
+            # Check if the output is in the new schema format
+            is_new_schema = "product" in result and isinstance(result["product"], dict)
+            
+            if is_new_schema:
+                prod = result["product"]
+                assets = result.get("assets", [])
+                source = result.get("source", {})
+                
+                # Unpack and map new schema to flat layout for backwards compatibility
+                flat_res = {
+                    "title": prod.get("title") or "Unnamed Product",
+                    "sku": None,
+                    "price": "0.00",
+                    "currency": "USD",
+                    "price_unit": None,
+                    "purchase_type": "direct_buy",
+                    "vendor": prod.get("vendor"),
+                    "short_description": prod.get("body_html") or "",
+                    "specifications": [],
+                    "media_links": [],
+                    "file_links": [],
+                    "assets": assets
+                }
+                
+                # Extract SKU, price, currency from variants
+                variants = prod.get("variants", [])
+                if variants and isinstance(variants, list) and isinstance(variants[0], dict):
+                    v = variants[0]
+                    flat_res["sku"] = v.get("sku")
+                    flat_res["price"] = v.get("price") or "0.00"
+                    flat_res["variants"] = variants
+                    flat_res["options"] = prod.get("options") or []
+                    
+                # Extract specifications from source raw_attributes or metafields
+                raw_attrs = source.get("raw_attributes", {})
+                if isinstance(raw_attrs, dict) and raw_attrs:
+                    flat_res["specifications"] = [
+                        {"name": k, "rawValue": str(v)} for k, v in raw_attrs.items()
+                    ]
+                else:
+                    metafields = prod.get("metafields", [])
+                    flat_res["specifications"] = [
+                        {"name": m.get("key"), "rawValue": str(m.get("value"))} 
+                        for m in metafields if isinstance(m, dict) and m.get("key")
+                    ]
+                    
+                result = flat_res
+            else:
+                # Ensure baseline keys exist in flat layout
+                result["price"] = result.get("price") or "0.00"
+                result["currency"] = result.get("currency") or "USD"
+                result["price_unit"] = result.get("price_unit") or None
+                result["vendor"] = result.get("vendor") or None
+                if "assets" not in result:
+                    # Construct assets from existing media_links/file_links
+                    assets = []
+                    for m in result.get("media_links", []):
+                        assets.append({
+                            "type": "image",
+                            "role": "gallery",
+                            "src": m.get("url"),
+                            "alt": m.get("alt", "")
+                        })
+                    for f in result.get("file_links", []):
+                        assets.append({
+                            "type": "pdf",
+                            "role": "spec_sheet",
+                            "src": f.get("url"),
+                            "title": f.get("text", "")
+                        })
+                    result["assets"] = assets
+
+            # Run Python Asset Downloader & Hasher
+            downloaded_assets = []
+            for asset in result.get("assets", []):
+                src = asset.get("src")
+                if not src:
+                    continue
+                # Resolve relative URL to absolute URL
+                abs_src = resolve_url(src, url, domain)
+                
+                # Setup custom referer / user headers if required
+                download_meta = asset.get("download", {})
+                headers = download_meta.get("headers") or {}
+                if download_meta.get("referer_required") or "outre.com" in domain:
+                    headers["Referer"] = f"https://{domain}/"
+                    
+                # Download and hash
+                dl_res = download_and_hash_asset(abs_src, headers=headers)
+                if dl_res.get("success"):
+                    asset["src"] = dl_res["local_url"]
+                    asset["sha256"] = dl_res["sha256"]
+                    asset["mime_type"] = dl_res["mime_type"]
+                else:
+                    # Fallback to absolute URL
+                    asset["src"] = abs_src
+                    
+                downloaded_assets.append(asset)
+            result["assets"] = downloaded_assets
+            
+            # Map processed assets back to flat media_links and file_links
+            result["media_links"] = []
+            result["file_links"] = []
+            for a in downloaded_assets:
+                a_type = a.get("type")
+                a_src = a.get("src")
+                if a_type == "image":
+                    result["media_links"].append({
+                        "url": a_src,
+                        "alt": a.get("alt") or ""
+                    })
+                elif a_type in ("pdf", "document"):
+                    result["file_links"].append({
+                        "url": a_src,
+                        "text": a.get("title") or a.get("filename") or "Product Document"
+                    })
+                    
+            # Parse specification units for unit normalization
             specs_normalized = []
             for spec in result.get("specifications", []):
                 name = spec.get("name")
@@ -1698,28 +2059,6 @@ def extract_product():
                     specs_normalized.append(parse_specification_unit(name, raw_val))
             result["specifications"] = specs_normalized
             
-            # Resolve relative URLs returned by OpenAI
-            media_resolved = []
-            for media in result.get("media_links", []):
-                m_url = media.get("url")
-                if m_url:
-                    media_resolved.append({
-                        "url": resolve_url(m_url, url, domain),
-                        "alt": media.get("alt", "")
-                    })
-            result["media_links"] = media_resolved
-
-            files_resolved = []
-            for fl in result.get("file_links", []):
-                f_url = fl.get("url")
-                if f_url:
-                    resolved_f_url = resolve_url(f_url, url, domain)
-                    resolved_f_url = resolve_pdf_viewer_url(resolved_f_url)
-                    files_resolved.append({
-                        "url": resolved_f_url,
-                        "text": fl.get("text", "")
-                    })
-            result["file_links"] = files_resolved
         except Exception:
             pass
 
@@ -1727,6 +2066,28 @@ def extract_product():
         result = rule_based_extract(markdown, url=url, domain=domain)
 
     enrich_product_with_pdf_links(result, url, domain)
+
+    # Ensure 'assets' key always exists in the response (rule-based path may not set it)
+    if "assets" not in result:
+        assets_from_flat = []
+        for m in result.get("media_links", []):
+            if m.get("url"):
+                assets_from_flat.append({
+                    "type": "image",
+                    "role": "gallery",
+                    "src": m.get("url"),
+                    "alt": m.get("alt", "")
+                })
+        for f in result.get("file_links", []):
+            if f.get("url"):
+                assets_from_flat.append({
+                    "type": "pdf",
+                    "role": "spec_sheet",
+                    "src": f.get("url"),
+                    "title": f.get("text", "")
+                })
+        result["assets"] = assets_from_flat
+
     result["success"] = True
     return jsonify(result)
 

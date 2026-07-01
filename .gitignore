@@ -108,3 +108,12 @@ __pycache__/
 
 # Local workspace files
 *.code-workspace
+
+# Runtime downloaded assets (hashed on server, should not be committed)
+public/extracted/*
+!public/extracted/.gitkeep
+
+# Debug / crawl artefacts
+crawl_logs.txt
+outre.html
+product.json
