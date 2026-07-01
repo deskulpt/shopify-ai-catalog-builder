@@ -1992,13 +1992,18 @@ def extract_product():
                 assets = result.get("assets", [])
                 source = result.get("source", {})
                 
+                # Run price/currency/unit extraction on raw markdown as ground truth
+                # The new AI schema puts price in variants[0].price but doesn't have
+                # a dedicated currency or price_unit field — the markdown is more reliable
+                md_price, md_currency, md_unit = extract_price_and_currency(markdown)
+                
                 # Unpack and map new schema to flat layout for backwards compatibility
                 flat_res = {
                     "title": prod.get("title") or "Unnamed Product",
                     "sku": None,
-                    "price": "0.00",
-                    "currency": "USD",
-                    "price_unit": None,
+                    "price": md_price or "0.00",
+                    "currency": md_currency or "USD",
+                    "price_unit": md_unit or None,
                     "purchase_type": "direct_buy",
                     "vendor": prod.get("vendor"),
                     "short_description": prod.get("body_html") or "",
@@ -2008,15 +2013,20 @@ def extract_product():
                     "assets": assets
                 }
                 
-                # Extract SKU, price, currency from variants
-                variants = prod.get("variants", [])
+                # Extract SKU, price, currency from variants (override only if AI price is richer)
+                variants = prod.get("variants", [])\
+                
                 if variants and isinstance(variants, list) and isinstance(variants[0], dict):
                     v = variants[0]
                     flat_res["sku"] = v.get("sku")
-                    flat_res["price"] = v.get("price") or "0.00"
+                    ai_price = v.get("price")
+                    # Only take AI price if it's a non-null, non-zero value
+                    if ai_price and str(ai_price).strip() not in ("", "0", "0.00", "null"):
+                        flat_res["price"] = str(ai_price)
                     flat_res["variants"] = variants
                     flat_res["options"] = prod.get("options") or []
                     
+
                 # Extract specifications from source raw_attributes or metafields
                 raw_attrs = source.get("raw_attributes", {})
                 if isinstance(raw_attrs, dict) and raw_attrs:
