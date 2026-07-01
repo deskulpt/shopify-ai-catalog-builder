@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from catalog_pdf_parser import parse_catalog_pdf_file, parse_catalog_pdf_bytes
 from advanced_pdf_parser import AIAssistedExtractor
 from pdf_extraction_config import get_pdf_config, get_config_manager
+from moa_extraction import enhance_extraction, batch_extract_moa
 
 
 app = Flask(__name__)
@@ -2151,6 +2152,97 @@ def extract_product():
 
     result["success"] = True
     return jsonify(result)
+
+
+@app.route('/moa-extract', methods=['POST'])
+def moa_extract_batch():
+    """MOA-enhanced extraction: processes markdown with Perplexity enrichment.
+    
+    Accepts:
+      - Single: { markdown, domain, url }
+      - Batch:  { products: [{id, markdown, url}], domain }
+    
+    Returns enhanced product data with AI-enriched fields.
+    """
+    data = request.get_json() or {}
+    
+    # Batch mode
+    if "products" in data and isinstance(data["products"], list):
+        products = data["products"]
+        domain = data.get("domain", "")
+        
+        results = []
+        for idx, prod in enumerate(products):
+            md = prod.get("markdown", "")
+            if not md:
+                results.append({"id": prod.get("id", idx), "error": "No markdown"})
+                continue
+            
+            # Run standard extraction first as base
+            base_result = _run_rule_based_only(md, url=prod.get("url", ""), domain=domain)
+            
+            # Enhance with MOA (Perplexity)
+            enhanced = enhance_extraction(
+                md, base_result,
+                domain=domain,
+                url=prod.get("url", ""),
+            )
+            enhanced["_source_id"] = prod.get("id", idx)
+            enhanced["success"] = True
+            results.append(enhanced)
+        
+        return jsonify({
+            "success": True,
+            "batch": True,
+            "products": results,
+            "count": len(results),
+        })
+    
+    # Single mode
+    markdown = data.get("markdown")
+    domain = data.get("domain", "")
+    url = data.get("url", "")
+    
+    if not markdown:
+        return jsonify({"error": "No Markdown content provided"}), 400
+    
+    # Run standard extraction as base
+    base_result = _run_rule_based_only(markdown, url=url, domain=domain)
+    
+    # Enhance with MOA
+    enhanced = enhance_extraction(markdown, base_result, domain=domain, url=url)
+    enhanced["success"] = True
+    return jsonify(enhanced)
+
+
+def _run_rule_based_only(markdown, url="", domain=""):
+    """Run rule-based extraction only (no AI, no fallback loop)."""
+    # These functions are in the same module (markitdown_service.py scope)
+    
+    # Run rule-based extraction directly
+    result = rule_based_extract(markdown, url=url, domain=domain)
+    
+    # Ensure baseline keys
+    if "price" not in result:
+        md_price, md_currency, md_unit = extract_price_and_currency(markdown)
+        result["price"] = md_price or "0.00"
+        result["currency"] = md_currency or "USD"
+        result["price_unit"] = md_unit or None
+    
+    result.setdefault("title", "Unnamed Product")
+    result.setdefault("purchase_type", "direct_buy")
+    result.setdefault("specifications", [])
+    result.setdefault("media_links", [])
+    result.setdefault("file_links", [])
+    result.setdefault("options", [])
+    result.setdefault("variants", [])
+    result.setdefault("short_description", "")
+    result.setdefault("vendor", None)
+    
+    enrich_product_with_pdf_links(result, url, domain)
+    
+    return result
+
 
   # ─── Variant Grouping Helpers ─────────────────────────────────────────────────
 
