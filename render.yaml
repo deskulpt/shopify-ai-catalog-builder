@@ -8,6 +8,10 @@ services:
     envVars:
       - key: PORT
         value: 5005
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
 
   - type: web
     name: product-ingest-ai-node
