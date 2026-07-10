@@ -122,6 +122,7 @@ const TOC_ITEMS = [
   { id: "settings-ref", label: "Settings Reference" },
   { id: "troubleshooting", label: "Troubleshooting" },
   { id: "faq", label: "FAQ" },
+  { id: "support", label: "Get Support" },
 ];
 
 export default function HelpPage() {
@@ -157,6 +158,24 @@ export default function HelpPage() {
 
         {/* ── Main content ── */}
         <div>
+
+          {/* MARKETING / ONBOARDING HERO */}
+          <div style={{
+            background: "linear-gradient(135deg, #008060 0%, #004c3f 100%)",
+            color: "white", borderRadius: "12px", padding: "28px 32px",
+            marginBottom: "24px", boxShadow: "0 4px 14px rgba(0,128,96,0.18)"
+          }}>
+            <h1 style={{ margin: "0 0 8px", fontSize: "22px", fontWeight: 800 }}>Welcome to AI Catalog Builder 🚀</h1>
+            <p style={{ margin: "0 0 14px", fontSize: "14px", lineHeight: 1.6, opacity: 0.95, maxWidth: "640px" }}>
+              Turn any supplier or manufacturer website into a structured, SEO-ready Shopify catalog —
+              automatically. Crawl product pages, extract specs and images, parse PDF brochures, group
+              variants, and publish clean DRAFT listings in minutes instead of hours of manual entry.
+            </p>
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+              <a href="#quickstart" style={{ background: "white", color: "#008060", padding: "9px 18px", borderRadius: "7px", fontWeight: 700, textDecoration: "none", fontSize: "13px" }}>Start in 5 steps →</a>
+              <a href="#support" style={{ background: "rgba(255,255,255,0.15)", color: "white", padding: "9px 18px", borderRadius: "7px", fontWeight: 600, textDecoration: "none", fontSize: "13px" }}>Get Support</a>
+            </div>
+          </div>
 
           {/* OVERVIEW */}
           <DocSection id="overview" emoji="🚀" title="App Overview">
@@ -502,6 +521,22 @@ export default function HelpPage() {
                 <p style={{ margin: 0, color: "#3b3b3b" }}>A: {a}</p>
               </div>
             ))}
+          </DocSection>
+
+          {/* GET SUPPORT */}
+          <DocSection id="support" emoji="💬" title="Get Support">
+            <P>Stuck, or want help onboarding your first catalog? Our team is happy to help.</P>
+            <div style={{ display: "flex", gap: "14px", flexWrap: "wrap", marginTop: "6px" }}>
+              <a href="mailto:hello@deskulpt.com" style={{ background: "#008060", color: "white", padding: "12px 22px", borderRadius: "8px", fontWeight: 700, textDecoration: "none", fontSize: "14px" }}>
+                ✉️ Email hello@deskulpt.com
+              </a>
+              <a href="https://deskulpt.com" target="_blank" rel="noopener noreferrer" style={{ background: "white", border: "1px solid #c9cccf", color: "#1a1c1d", padding: "12px 22px", borderRadius: "8px", fontWeight: 600, textDecoration: "none", fontSize: "14px" }}>
+                Visit deskulpt.com →
+              </a>
+            </div>
+            <Callout type="note">
+              Include your store name and the supplier URL you're importing — we'll get back to you within one business day.
+            </Callout>
           </DocSection>
 
         </div>
