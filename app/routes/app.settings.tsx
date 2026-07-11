@@ -38,6 +38,9 @@ const DEFAULTS = {
   aiExtractionStrategy: "hybrid", // "pattern_based" | "hybrid" | "ai_only"
   aiMaxProductsBeforeFallback: 100,
   anthropicApiKey: "",
+  openrouterApiKey: "",
+  geminiApiKey: "",
+  aiProvider: "anthropic",
 
   // Specifications
   specMinKeyLength: 3,
@@ -234,6 +237,9 @@ export default function SettingsPage() {
             strategy: settings.aiExtractionStrategy,
             max_extracted_products: settings.aiMaxProductsBeforeFallback,
             anthropic_api_key: settings.anthropicApiKey,
+            openrouter_api_key: settings.openrouterApiKey,
+            gemini_api_key: settings.geminiApiKey,
+            ai_provider: settings.aiProvider,
           })
         });
       } catch (e) {
@@ -388,6 +394,40 @@ export default function SettingsPage() {
           )}
           {!settings.anthropicApiKey && settings.aiExtractionEnabled && (
             <p style={{...helpStyle, color: "#c23729"}}>⚠️ No API key – AI fallback will be skipped</p>
+          )}
+        </Field>
+        <Field
+          label="OpenRouter API Key"
+          help={`Optional. Routes AI calls through OpenRouter (works with many models). Get one at ${
+            'https://openrouter.ai/keys'
+          }`}
+        >
+          <input
+            type="password"
+            placeholder="sk-or-..."
+            style={{...inputStyle}}
+            value={settings.openrouterApiKey}
+            onChange={e => set("openrouterApiKey", e.target.value)}
+          />
+          {settings.openrouterApiKey && (
+            <p style={{...helpStyle, color: "#2d7f3a"}}>✓ OpenRouter key configured</p>
+          )}
+        </Field>
+        <Field
+          label="Gemini API Key"
+          help={`Optional. Google Gemini for AI extraction. Get one at ${
+            'https://aistudio.google.com/apikey'
+          }`}
+        >
+          <input
+            type="password"
+            placeholder="AIza..."
+            style={{...inputStyle}}
+            value={settings.geminiApiKey}
+            onChange={e => set("geminiApiKey", e.target.value)}
+          />
+          {settings.geminiApiKey && (
+            <p style={{...helpStyle, color: "#2d7f3a"}}>✓ Gemini key configured</p>
           )}
         </Field>
       </Section>

@@ -26,8 +26,15 @@ class PDFExtractionConfig:
     # Whether to use Claude API for complex PDFs
     use_ai_fallback: bool = True
 
+    # Which provider to use for AI extraction: anthropic | openrouter | gemini
+    ai_provider: str = "anthropic"
+
     # Anthropic API key (read from env if not set here)
     anthropic_api_key: Optional[str] = None
+
+    # Alternative provider keys (read from env if not set here)
+    openrouter_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
 
     # Quality thresholds for triggering AI fallback
     max_extracted_products: int = 100  # if more, likely duplicates
@@ -56,18 +63,43 @@ class PDFExtractionConfig:
             return self.anthropic_api_key
         return os.environ.get('ANTHROPIC_API_KEY')
 
+    def get_openrouter_key(self) -> Optional[str]:
+        if self.openrouter_api_key:
+            return self.openrouter_api_key
+        return os.environ.get('OPENROUTER_API_KEY')
+
+    def get_gemini_key(self) -> Optional[str]:
+        if self.gemini_api_key:
+            return self.gemini_api_key
+        return os.environ.get('GEMINI_API_KEY')
+
+    def get_active_key(self) -> Optional[str]:
+        """Return the API key for the currently selected provider."""
+        # ponytail: resolver dict keyed by provider, add entry not branch
+        return {
+            "anthropic": self.get_anthropic_key,
+            "openrouter": self.get_openrouter_key,
+            "gemini": self.get_gemini_key,
+        }.get(self.ai_provider, self.get_anthropic_key)()
+
     def is_ai_available(self) -> bool:
-        """Check if AI extraction is available (both SDK and API key)."""
-        try:
-            import anthropic  # noqa: F401
+        """Check if AI extraction is available for the selected provider."""
+        # ponytail: shared gate, route per provider so all keys engage fallback
+        if self.ai_provider == "anthropic":
+            try:
+                import anthropic  # noqa: F401
+            except ImportError:
+                return False
             return bool(self.get_anthropic_key())
-        except ImportError:
-            return False
+        return bool(self.get_active_key())
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict (excluding API keys)."""
         d = asdict(self)
         d['anthropic_api_key'] = '***' if d.get('anthropic_api_key') else None
+        d['openrouter_api_key'] = '***' if d.get('openrouter_api_key') else None
+        d['gemini_api_key'] = '***' if d.get('gemini_api_key') else None
+        d['ai_provider'] = d.get('ai_provider', 'anthropic')
         return d
 
 

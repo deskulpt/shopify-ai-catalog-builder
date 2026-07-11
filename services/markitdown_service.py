@@ -2693,7 +2693,10 @@ def pdf_extract():
 
                     # Use AI extraction
                     from advanced_pdf_parser import AIAssistedExtractor
-                    ai_extractor = AIAssistedExtractor(api_key=config.get_anthropic_key())
+                    ai_extractor = AIAssistedExtractor(
+                        api_key=config.get_active_key(),
+                        provider=config.ai_provider,
+                    )
                     ai_products = ai_extractor.extract_products_from_text(
                         markdown_text,
                         pdf_name=os.path.basename(tmp_path)
@@ -2757,7 +2760,9 @@ def pdf_config():
         allowed_fields = {
             'strategy', 'use_ai_fallback', 'max_extracted_products',
             'min_sku_length', 'bogus_sku_ratio', 'detect_columns',
-            'verbose', 'save_intermediate_extractions'
+            'verbose', 'save_intermediate_extractions',
+            'anthropic_api_key', 'openrouter_api_key', 'gemini_api_key',
+            'ai_provider'
         }
 
         for key, value in data.items():

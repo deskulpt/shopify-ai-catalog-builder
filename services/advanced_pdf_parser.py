@@ -21,6 +21,8 @@ except ImportError:
     HAS_ANTHROPIC = False
     Anthropic = None
 
+import requests  # installed dependency, no guard needed (see markitdown_service.py)
+
 # ─── Column-Based Product Box Parser ───────────────────────────────────────
 
 @dataclass
@@ -211,29 +213,75 @@ class ColumnBasedParser:
 # ─── AI-Assisted Extraction Fallback ───────────────────────────────────────
 
 class AIAssistedExtractor:
-    """Use Claude API to extract products from PDFs when pattern-based parsing fails."""
+    """AI extraction fallback routed by provider: anthropic | openrouter | gemini."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.environ.get('ANTHROPIC_API_KEY')
+    def __init__(self, api_key: Optional[str] = None, provider: str = "anthropic"):
+        self.provider = provider
+        self.api_key = api_key
         self.client = None
-        if HAS_ANTHROPIC and self.api_key:
+        if self.provider == "anthropic" and HAS_ANTHROPIC and self.api_key:
             self.client = Anthropic(api_key=self.api_key)
 
-    def extract_products_from_text(self, markdown_text: str, pdf_name: str = "catalog") -> List[Dict[str, Any]]:
-        """
-        Use Claude to extract structured products from markdown-converted PDF text.
-        Returns list of product dicts with title, sku, specs, variants.
-        """
+    def _complete(self, prompt: str):
+        """Return parsed JSON (list or dict) from the active provider, or None."""
+        # ponytail: provider dispatch, add branch per new provider
+        if self.provider == "gemini":
+            return self._gemini(prompt)
+        if self.provider == "openrouter":
+            return self._openrouter(prompt)
+        # anthropic
         if not self.client:
-            return []
-
+            return None
         try:
             message = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=4096,
-                messages=[{
-                    "role": "user",
-                    "content": f"""You are a product data extraction specialist.
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return _parse_json(message.content[0].text)
+        except Exception as e:
+            print(f"AI extraction error: {e}")
+            return None
+
+    def _gemini(self, prompt: str):
+        if not self.api_key:
+            return None
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.api_key}"
+        try:
+            resp = requests.post(url, json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0},
+            }, timeout=60)
+            resp.raise_for_status()
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return _parse_json(text)
+        except Exception as e:
+            print(f"Gemini completion error: {e}")
+            return None
+
+    def _openrouter(self, prompt: str):
+        if not self.api_key:
+            return None
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json={"model": "anthropic/claude-3.5-sonnet", "messages": [{"role": "user", "content": prompt}], "temperature": 0.0},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            return _parse_json(content)
+        except Exception as e:
+            print(f"OpenRouter completion error: {e}")
+            return None
+
+    def extract_products_from_text(self, markdown_text: str, pdf_name: str = "catalog") -> List[Dict[str, Any]]:
+        """
+        Use AI to extract structured products from markdown-converted PDF text.
+        Returns list of product dicts with title, sku, specs, variants.
+        """
+        prompt = f"""You are a product data extraction specialist.
 
 I've converted a PDF catalog to markdown text. Extract all distinct products with their variants.
 
@@ -267,38 +315,15 @@ Return JSON array like:
 Markdown text to parse:
 {markdown_text[:8000]}
 """
-                }]
-            )
-
-            response_text = message.content[0].text
-
-            # Extract JSON from response
-            import json
-            json_match = re.search(r'\[[\s\S]*\]', response_text)
-            if json_match:
-                products = json.loads(json_match.group(0))
-                return products
-
-        except Exception as e:
-            print(f"AI extraction error: {e}")
-
-        return []
+        result = self._complete(prompt)
+        return result if isinstance(result, list) else []
 
     def detect_pdf_structure(self, markdown_text: str) -> Dict[str, Any]:
         """
-        Use Claude to analyze and describe the PDF structure.
+        Use AI to analyze and describe the PDF structure.
         Returns metadata about layout, product grouping, variant patterns.
         """
-        if not self.client:
-            return {}
-
-        try:
-            message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=2000,
-                messages=[{
-                    "role": "user",
-                    "content": f"""Analyze this product catalog structure:
+        prompt = f"""Analyze this product catalog structure:
 
 {markdown_text[:4000]}
 
@@ -312,18 +337,26 @@ Return JSON:
   "estimated_variants_per_product": 4
 }}
 """
-                }]
-            )
+        result = self._complete(prompt)
+        return result if isinstance(result, dict) else {}
 
-            response_text = message.content[0].text
-            import json
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                return json.loads(json_match.group(0))
-        except Exception as e:
-            print(f"Structure detection error: {e}")
 
-        return {}
+def _parse_json(text: str):
+    """Best-effort extract a JSON array or object from model output."""
+    import json
+    arr = re.search(r'\[[\s\S]*\]', text)
+    if arr:
+        try:
+            return json.loads(arr.group(0))
+        except json.JSONDecodeError:
+            pass
+    obj = re.search(r'\{[\s\S]*\}', text)
+    if obj:
+        try:
+            return json.loads(obj.group(0))
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 # ─── Unified Parser ───────────────────────────────────────────────────────
