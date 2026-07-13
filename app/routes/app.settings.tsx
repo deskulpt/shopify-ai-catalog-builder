@@ -89,14 +89,18 @@ function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
-  } catch (_) {}
+  } catch (_) {
+    /* ponytail: localStorage may throw (private mode / quota) — fall back to defaults */
+  }
   return { ...DEFAULTS };
 }
 
 function saveSettings(s: Settings) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  } catch (_) {}
+  } catch (_) {
+    /* ponytail: ignore write failures (quota / disabled storage) */
+  }
 }
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────

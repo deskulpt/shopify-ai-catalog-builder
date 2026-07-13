@@ -907,7 +907,7 @@ export default function Index() {
   };
 
   const handleCategorySelectToggle = (category: any, checked: boolean) => {
-    let catKeys: string[] = [];
+    const catKeys: string[] = [];
     if (groupSimilar && groupedCategories[category.name]) {
       groupedCategories[category.name].forEach((group: any, groupIdx: number) => {
         group.variants.forEach((v: any, variantIdx: number) => {
@@ -1317,7 +1317,7 @@ export default function Index() {
   const performGroupingForData = async (crawlData: any, currentCollections: any[]) => {
     setIsGrouping(true);
     const newGroupedCats: Record<string, any[]> = {};
-    let totalStats = { total: 0, matched: 0, new: 0 };
+    const totalStats = { total: 0, matched: 0, new: 0 };
 
     try {
       let collections = currentCollections;
@@ -1328,8 +1328,10 @@ export default function Index() {
           if (colData.success && colData.collections) {
             setShopifyCollections(colData.collections);
             collections = colData.collections;
-          }
-        } catch (_) {}
+            }
+            } catch (_) {
+            /* ponytail: collections fetch failed — fall through with currentCollections */
+            }
       }
 
       for (const category of crawlData.categories) {
@@ -1965,7 +1967,7 @@ export default function Index() {
 
     setIsGrouping(true);
     const newGroupedCats: Record<string, any[]> = {};
-    let totalStats = { total: 0, matched: 0, new: 0 };
+    const totalStats = { total: 0, matched: 0, new: 0 };
 
     try {
       // Step 1: Fetch existing Shopify collections once

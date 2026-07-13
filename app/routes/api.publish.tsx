@@ -92,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const fileData = await fileRes.json();
         
         if (fileData.data?.fileCreate?.files) {
-          let pendingFiles = fileData.data.fileCreate.files.map((f: any, idx: number) => ({
+          const pendingFiles = fileData.data.fileCreate.files.map((f: any, idx: number) => ({
             id: f.id,
             status: f.fileStatus,
             url: f.url,
