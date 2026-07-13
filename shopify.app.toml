@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "a30d29fc96a831fbbc8c71dcddd47472"
+client_id = "bc52c6b4dded536b8abfa06a7a518439"
 name = "Deskulpt Product AI Ingester"
 application_url = "https://product-ingest-ai-node.onrender.com"
 embedded = true
