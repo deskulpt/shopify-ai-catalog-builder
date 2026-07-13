@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import type {
-  ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
@@ -168,34 +167,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = async () => {
   return null;
-};
-
-const getButtonStyle = (type: 'primary' | 'secondary' | 'destructive' | 'tertiary') => {
-  const base: React.CSSProperties = {
-    padding: "8px 16px",
-    borderRadius: "6px",
-    fontSize: "13px",
-    fontWeight: 600,
-    cursor: "pointer",
-    border: "none",
-    transition: "all 0.15s ease",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "6px",
-  };
-  if (type === 'primary') {
-    return { ...base, background: "#008060", color: "white" };
-  }
-  if (type === 'destructive') {
-    return { ...base, background: "#d72c0d", color: "white" };
-  }
-  if (type === 'secondary') {
-    return { ...base, border: "1px solid #c9cccf", background: "white", color: "#1a1c1d" };
-  }
-  return { ...base, background: "transparent", color: "#008060", padding: "6px 12px" };
 };
 
 export default function Index() {
@@ -720,9 +693,9 @@ export default function Index() {
   const [activeTab, setActiveTab] = useState<"ingest" | "crawl" | "queue">("ingest");
   const [previewSubTab, setPreviewSubTab] = useState<"markdown" | "schema">("schema");
   
-  const [globalOverwriteTitle, setGlobalOverwriteTitle] = useState(true);
-  const [globalOverwriteDescription, setGlobalOverwriteDescription] = useState(true);
-  const [globalOverwriteVariants, setGlobalOverwriteVariants] = useState(true);
+  const [globalOverwriteTitle] = useState(true);
+  const [globalOverwriteDescription] = useState(true);
+  const [globalOverwriteVariants] = useState(true);
 
   const handleSingleProductUrlRoute = async (targetUrl: string) => {
     const newSource: QueuedSource = {
@@ -1881,7 +1854,6 @@ export default function Index() {
     const currentlyConverting = queuedSources.filter(s => s.status === "converting").length;
     if (currentlyConverting > 0) return;
 
-    let isMounted = true;
     const processNext = async () => {
       setQueuedSources(prev => prev.map(s => s.id === nextSource.id ? { ...s, status: "converting" } : s));
       
@@ -1892,7 +1864,6 @@ export default function Index() {
     };
 
     processNext();
-    return () => { isMounted = false; };
   }, [queuedSources, isProcessingQueue, throttleDelay]);
   // ----------------------------------------------
 
@@ -2114,11 +2085,6 @@ export default function Index() {
       setIsExtracting(false);
     }
   };
-
-  const allCollections = [
-    ...shopifyCollections,
-    ...customCollections.map(c => ({ id: c.id, title: c.title, handle: "", productsCount: 0 }))
-  ];
 
   return (
     <s-page heading="Product Ingest AI" full-width>

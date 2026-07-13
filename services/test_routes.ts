@@ -20,7 +20,7 @@ async function runTests() {
     { id: "gid://shopify/MetafieldDefinition/2", name: "Color", namespace: "custom", key: "color", type: { name: "single_line_text_field" } }
   ];
 
-  const graphqlMock1 = async (query: string) => {
+  const graphqlMock1 = async () => {
     return {
       json: async () => ({
         data: {
@@ -57,7 +57,7 @@ async function runTests() {
     type: { name: "single_line_text_field" }
   };
 
-  const graphqlMock2 = async (query: string, options: any) => {
+  const graphqlMock2 = async () => {
     return {
       json: async () => ({
         data: {
