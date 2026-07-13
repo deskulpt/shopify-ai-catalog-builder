@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "5758b8b0518b5f90a6f39cd8ee75c59f"
+client_id = "bc52c6b4dded536b8abfa06a7a518439"
 name = "product-ingest-ai"
 application_url = "https://product-ingest-ai-node.onrender.com"
 embedded = true

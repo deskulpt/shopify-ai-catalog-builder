@@ -2,6 +2,9 @@ import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
+import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+import polarisTranslations from "@shopify/polaris/locales/en.json";
 
 import { authenticate } from "../shopify.server";
 
@@ -16,15 +19,17 @@ export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
-      <s-app-nav>
-        <s-link href="/app">Catalog Ingest</s-link>
-        <s-link href="/app/settings">Settings</s-link>
-        <s-link href="/app/help">Help & Docs</s-link>
-        <s-link href="/app/help#support">Support</s-link>
-      </s-app-nav>
-      <Outlet />
-    </AppProvider>
+    <PolarisAppProvider i18n={polarisTranslations}>
+      <AppProvider embedded apiKey={apiKey}>
+        <s-app-nav>
+          <s-link href="/app">Catalog Ingest</s-link>
+          <s-link href="/app/settings">Settings</s-link>
+          <s-link href="/app/help">Help & Docs</s-link>
+          <s-link href="/app/help#support">Support</s-link>
+        </s-app-nav>
+        <Outlet />
+      </AppProvider>
+    </PolarisAppProvider>
   );
 }
 
@@ -32,6 +37,8 @@ export default function App() {
 export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }
+
+export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
