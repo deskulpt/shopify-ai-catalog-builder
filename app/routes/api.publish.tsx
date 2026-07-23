@@ -295,7 +295,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const mutationName = existingProductId ? "productUpdate" : "productCreate";
     const productMutation = `
-      mutation ${mutationName}($product: ${existingProductId ? "ProductInput!" : "ProductCreateInput!"}${existingProductId ? "" : ", $media: [CreateMediaInput!]"}) {
+      mutation ${mutationName}($product: ${existingProductId ? "ProductUpdateInput!" : "ProductCreateInput!"}${existingProductId ? "" : ", $media: [CreateMediaInput!]"}) {
         ${mutationName}(product: $product${existingProductId ? "" : ", media: $media"}) {
           product {
             id
