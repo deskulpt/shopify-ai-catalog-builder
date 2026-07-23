@@ -10,8 +10,10 @@ import re
 from bs4 import BeautifulSoup
 import uuid
 from pypdf import PdfReader
+from datetime import datetime
 import hashlib
 import mimetypes
+from auto_template import apply_extraction_rules, build_gemini_template_prompt
 
 # Add services dir to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -1846,6 +1848,106 @@ RETURN THIS EXACT SHAPE:
 }
 """
 
+
+def load_gemini_schema_prompt():
+    return """You are an automated e-commerce data extraction engine. Parse the provided HTML or webpage context and output strictly valid JSON conforming to the schema rules below:
+1. **Description Sections:** Map all accordion buttons, tabs, or collapsible headers (e.g., "DETAILS", "INGREDIENTS", "HOW TO USE", "SIZE") into an array of objects: `{"section_title": "...", "content": "..."}`.
+2. **Images Array:** Extract absolute image URLs (`https://...`), preserving high-resolution source paths where available, alongside their sequence position and `alt` attribute.
+3. **Variants Loop:** Iterate over all visible or embedded variant selectors (e.g., Scents: "Eternal Grove", "Dive In Fig", "Still A Rose"). For each variant, extract its title, ID, pricing, stock status (`available`), and option mapping.
+4. **Metafields:** Capture key-value pairs from specs tables or product badge indicators (e.g., TSA-Friendly, Alcohol-Free) under `metafields`.
+5. **Output Requirement:** Output **ONLY** the valid JSON object. Do not include introductory text, explanations, or Markdown code wrappers outside the JSON body.
+
+JSON SCHEMA:
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EcommerceProductSchema",
+  "type": "object",
+  "properties": {
+    "product": {
+      "type": "object",
+      "properties": {
+        "id": { "type": ["string", "null"] },
+        "title": { "type": "string" },
+        "handle": { "type": ["string", "null"] },
+        "vendor": { "type": ["string", "null"] },
+        "product_type": { "type": ["string", "null"] },
+        "sku": { "type": ["string", "null"] },
+        "pricing": { "type": "object" },
+        "description_sections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "section_title": { "type": "string" },
+              "content": { "type": "string" }
+            },
+            "required": ["section_title", "content"]
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "position": { "type": "integer" },
+              "src": { "type": "string", "format": "uri" },
+              "alt": { "type": ["string", "null"] }
+            },
+            "required": ["position", "src"]
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "values": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["name", "values"]
+          }
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": ["string", "null"] },
+              "title": { "type": "string" },
+              "sku": { "type": ["string", "null"] },
+              "price": { "type": "number" },
+              "compare_at_price": { "type": ["number", "null"] },
+              "available": { "type": "boolean" },
+              "options": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "featured_image_src": { "type": ["string", "null"] }
+            },
+            "required": ["title", "price", "available"]
+          }
+        },
+        "metafields": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": [
+        "title",
+        "pricing",
+        "description_sections",
+        "images",
+        "options",
+        "variants"
+      ]
+    }
+  }
+}
+"""
+
 def extract_with_gemini(prompt: str) -> dict:
     """Call Google Gemini REST API to extract product data using the unified prompt"""
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -1930,8 +2032,8 @@ def extract_product():
     domain = data.get('domain', '')
     url = data.get('url', '')
     
-    if not markdown:
-        return jsonify({'error': 'No Markdown content provided'}), 400
+    if not markdown and not url:
+        return jsonify({'error': 'No Markdown or URL provided'}), 400
         
     if is_login_page_markdown(markdown):
         return jsonify({
@@ -1951,18 +2053,46 @@ def extract_product():
             "products": split_products
         })
         
-    # Single product flow
+    extraction_rules = data.get('extraction_rules')
     openai_key = os.environ.get("OPENAI_API_KEY")
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     result = None
     
-    # Load unified prompt template from Agent-backup-oneshot.md
-    raw_prompt = load_backup_prompt()
-    unified_prompt = raw_prompt + f"\n\nPage URL: {url}\n\nPage Markdown Document:\n{markdown}"
-    
-    # Try OpenAI first
+    # Try deterministic fast path
+    if extraction_rules and url:
+        try:
+            html_content = preprocess_html_content(http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content)
+            deterministic_product = apply_extraction_rules(html_content, extraction_rules)
+            if deterministic_product:
+                return jsonify({
+                    "success": True,
+                    "product": deterministic_product
+                })
+        except Exception as e:
+            logger.error(f"Deterministic extraction failed, falling back to AI: {e}")
+
+    # Fallback / Generation path
+    if gemini_key and url:
+        try:
+            html_content = preprocess_html_content(http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content)
+            gemini_unified_prompt = build_gemini_template_prompt(html_content)
+            result = extract_with_gemini(gemini_unified_prompt)
+            
+            # If the extraction succeeded, return the product and the newly generated rules to Node.js
+            if result and "product" in result:
+                return jsonify({
+                    "success": True,
+                    "product": result["product"],
+                    "extraction_rules": result.get("extraction_rules")
+                })
+        except Exception as e:
+            logger.error(f"Gemini rule generation failed: {e}")
+
+    # Fallback to standard OpenAI if everything else fails
     if openai_key:
         try:
+            raw_prompt = load_backup_prompt()
+            unified_prompt = raw_prompt + f"\n\nPage URL: {url}\n\nPage Markdown Document:\n{markdown}"
             from openai import OpenAI
             client = OpenAI(api_key=openai_key)
             response = client.chat.completions.create(
@@ -1972,13 +2102,6 @@ def extract_product():
                 temperature=0.0
             )
             result = json.loads(response.choices[0].message.content)
-        except Exception:
-            pass
-            
-    # Try Gemini backup call if OpenAI failed or is not available
-    if not result and gemini_key:
-        try:
-            result = extract_with_gemini(unified_prompt)
         except Exception:
             pass
             

@@ -425,6 +425,9 @@ export default function Index() {
   const [profileProductPatternInput, setProfileProductPatternInput] = useState("");
   const [profileCategoryPatternInput, setProfileCategoryPatternInput] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isDetectingPatterns, setIsDetectingPatterns] = useState(false);
+  const [detectedCategoryExample, setDetectedCategoryExample] = useState("");
+  const [detectedProductExample, setDetectedProductExample] = useState("");
 
   const [crawlUrlInput, setCrawlUrlInput] = useState("");
   const [customProductPattern, setCustomProductPattern] = useState("");
@@ -586,6 +589,50 @@ export default function Index() {
       shopify.toast.show(`Network error: ${err.message}`);
     } finally {
       setIsCreatingMetafield(prev => ({ ...prev, [attrName]: false }));
+    }
+  };
+
+  const handleAutoDetectPatterns = async () => {
+    if (!profileRootUrlInput.trim()) {
+      shopify.toast.show("Please enter a Root Website URL first");
+      return;
+    }
+    setIsDetectingPatterns(true);
+    shopify.toast.show("Detecting patterns from sitemap...");
+    try {
+      const res = await fetch("http://localhost:5005/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: profileRootUrlInput }),
+      });
+      const data = await res.json();
+      if (data.category_urls && data.category_urls.length > 0) {
+        const catUrl = new URL(data.category_urls[0]);
+        let path = catUrl.pathname;
+        if (path.includes("/collections/")) {
+           setProfileCategoryPatternInput("/collections/");
+        } else {
+           const parts = path.split('/').filter(Boolean);
+           if (parts.length > 0) setProfileCategoryPatternInput("/" + parts[0] + "/");
+        }
+        setDetectedCategoryExample(data.category_urls[0]);
+      }
+      if (data.product_urls && data.product_urls.length > 0) {
+        const prodUrl = new URL(data.product_urls[0]);
+        let path = prodUrl.pathname;
+        if (path.includes("/products/")) {
+           setProfileProductPatternInput("/products/");
+        } else {
+           const parts = path.split('/').filter(Boolean);
+           if (parts.length > 0) setProfileProductPatternInput("/" + parts[0] + "/");
+        }
+        setDetectedProductExample(data.product_urls[0]);
+      }
+      shopify.toast.show("Pattern detection complete");
+    } catch (e: any) {
+      shopify.toast.show(`Auto-detect failed: ${e.message}`);
+    } finally {
+      setIsDetectingPatterns(false);
     }
   };
 
@@ -1767,7 +1814,8 @@ export default function Index() {
           body: JSON.stringify({
             markdown: nextReady.markdown,
             domain: nextReady.domain,
-            url: nextReady.type === "url" ? nextReady.name : undefined
+            url: nextReady.type === "url" ? nextReady.name : undefined,
+            profileId: selectedProfileId
           }),
         });
         const extractData = await res.json();
@@ -2062,7 +2110,8 @@ export default function Index() {
         body: JSON.stringify({
           markdown: mdContent,
           domain: domainStr,
-          url: selectedSource?.type === "url" ? selectedSource.name : undefined
+          url: selectedSource?.type === "url" ? selectedSource.name : undefined,
+          profileId: selectedProfileId
         }),
       });
       const data = await res.json();
@@ -2390,21 +2439,40 @@ export default function Index() {
                         <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
                           Root Website URL
                         </label>
-                        <input
-                          type="url"
-                          placeholder="https://www.acme-electronics.com/"
-                          value={profileRootUrlInput}
-                          onChange={(e) => setProfileRootUrlInput(e.target.value)}
-                          style={{
-                            width: "100%",
-                            padding: "8px 12px",
-                            borderRadius: "4px",
-                            border: "1px solid #bbb",
-                            fontSize: "13px",
-                            boxSizing: "border-box",
-                          }}
-                          required
-                        />
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <input
+                            type="url"
+                            placeholder="https://www.acme-electronics.com/"
+                            value={profileRootUrlInput}
+                            onChange={(e) => setProfileRootUrlInput(e.target.value)}
+                            style={{
+                              flex: 1,
+                              padding: "8px 12px",
+                              borderRadius: "4px",
+                              border: "1px solid #bbb",
+                              fontSize: "13px",
+                              boxSizing: "border-box",
+                            }}
+                            required
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAutoDetectPatterns}
+                            disabled={isDetectingPatterns || !profileRootUrlInput}
+                            style={{
+                              background: "#f4f6f8",
+                              border: "1px solid #c9cccf",
+                              borderRadius: "4px",
+                              padding: "0 12px",
+                              fontSize: "13px",
+                              fontWeight: 500,
+                              cursor: (isDetectingPatterns || !profileRootUrlInput) ? "not-allowed" : "pointer",
+                              color: (isDetectingPatterns || !profileRootUrlInput) ? "#8c9196" : "#202223"
+                            }}
+                          >
+                            {isDetectingPatterns ? "Detecting..." : "Auto-Detect Patterns"}
+                          </button>
+                        </div>
                       </div>
                       <div>
                         <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
@@ -2422,8 +2490,14 @@ export default function Index() {
                             border: "1px solid #bbb",
                             fontSize: "13px",
                             boxSizing: "border-box",
+                            marginBottom: detectedCategoryExample ? "4px" : "0"
                           }}
                         />
+                        {detectedCategoryExample && (
+                          <div style={{ fontSize: "11px", color: "#007a5c", marginTop: "4px" }}>
+                            <strong>Detected Example:</strong> {detectedCategoryExample}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label style={{ display: "block", fontSize: "12px", fontWeight: 500, color: "#202223", marginBottom: "4px" }}>
@@ -2431,7 +2505,7 @@ export default function Index() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. /product/wireless-earbuds-pro or /products/item"
+                          placeholder="e.g. /products/iphone-14-pro or /shop/electronics/headphones"
                           value={profileProductPatternInput}
                           onChange={(e) => setProfileProductPatternInput(e.target.value)}
                           style={{
@@ -2441,8 +2515,14 @@ export default function Index() {
                             border: "1px solid #bbb",
                             fontSize: "13px",
                             boxSizing: "border-box",
+                            marginBottom: detectedProductExample ? "4px" : "0"
                           }}
                         />
+                        {detectedProductExample && (
+                          <div style={{ fontSize: "11px", color: "#007a5c", marginTop: "4px" }}>
+                            <strong>Detected Example:</strong> {detectedProductExample}
+                          </div>
+                        )}
                       </div>
                       
                       {/* Website Platform Quick Reference Guide */}

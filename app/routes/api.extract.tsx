@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   await authenticate.admin(request);
@@ -13,9 +14,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const markdown = data.markdown;
     const domain = data.domain;
     const url = data.url;
+    const profileId = data.profileId;
 
     if (!markdown) {
       return Response.json({ error: "No Markdown provided" }, { status: 400 });
+    }
+
+    let extractionRules = undefined;
+    if (profileId) {
+      const profile = await prisma.crawlProfile.findUnique({
+        where: { id: profileId },
+      });
+      if (profile && profile.extractionRules) {
+        try {
+          extractionRules = JSON.parse(profile.extractionRules);
+        } catch (e) {}
+      }
     }
 
     // Forward URL to Python extraction service
@@ -23,7 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const response = await fetch(`${markitdownUrl}/extract`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ markdown, domain, url }),
+      body: JSON.stringify({ markdown, domain, url, extraction_rules: extractionRules }),
     });
 
     if (!response.ok) {
@@ -35,6 +49,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const resData = await response.json();
+
+    // Auto-heal or first-time generation of rules
+    if (profileId && resData.extraction_rules) {
+      await prisma.crawlProfile.update({
+        where: { id: profileId },
+        data: { extractionRules: JSON.stringify(resData.extraction_rules) },
+      });
+    }
+
     return Response.json(resData);
   } catch (error: any) {
     return Response.json(

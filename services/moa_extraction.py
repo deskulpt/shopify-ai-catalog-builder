@@ -225,6 +225,16 @@ Respond with a JSON object ONLY. No markdown formatting, no code blocks.
             if f.get("url") and f["url"] not in existing_urls:
                 result.setdefault("file_links", []).append(f)
 
+    # Merge options
+    ai_options = ai_data.get("options", [])
+    if ai_options and isinstance(ai_options, list):
+        result["options"] = ai_options
+
+    # Merge variants
+    ai_variants = ai_data.get("variants", [])
+    if ai_variants and isinstance(ai_variants, list):
+        result["variants"] = ai_variants
+
     return result
 
 

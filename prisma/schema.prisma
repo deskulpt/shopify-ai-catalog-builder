@@ -40,6 +40,7 @@ model CrawlProfile {
   rootUrl         String
   productPattern  String   @default("")
   categoryPattern String   @default("")
+  extractionRules String?  @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
