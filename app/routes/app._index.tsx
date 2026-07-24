@@ -644,7 +644,6 @@ export default function Index() {
     } catch (e: any) {
       shopify.toast.show(`Auto-detect failed: ${e.message}`);
     } finally {
-    } finally {
       setIsDetectingPatterns(false);
     }
   };
