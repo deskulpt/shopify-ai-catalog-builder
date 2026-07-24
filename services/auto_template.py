@@ -212,11 +212,66 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                     if k and v and 3 <= len(k) <= 40:
                         metafields[k] = v
 
-        product["metafields"] = metafields
+        # 7. Product Tabs & Accordion Metafield Extraction (e.g. Details, How to Use, Ingredients, Features)
+        tab_metafields = extract_tabs_and_accordions(soup)
+        for tk, tv in tab_metafields.items():
+            if tk not in metafields:
+                metafields[tk] = tv
+
         return product
     except Exception as e:
         logger.error(f"Failed to apply extraction rules: {e}")
         return product
+
+def extract_tabs_and_accordions(soup):
+    extracted_tabs = {}
+    ignored_keywords = {"review", "write a review", "ask a question", "q&a", "customer review", "star"}
+    
+    # 1. Look for tab panels with id or role="tabpanel"
+    for pane in soup.select("[role='tabpanel'], .product-tabs__pane, .tab-pane, .tab-content, .accordion__content, details, product-metafield-tabs"):
+        title = None
+        pane_id = pane.get("id", "")
+        if pane_id:
+            header_el = soup.select_one(f"[aria-controls='{pane_id}'], [data-tab='{pane_id}'], a[href='#{pane_id}']")
+            if header_el:
+                title = header_el.get_text(strip=True)
+            elif pane_id.startswith("tab-"):
+                title = pane_id.replace("tab-", "").replace("-", " ").title()
+        
+        if not title:
+            if pane.name == "details":
+                summary = pane.find("summary")
+                if summary:
+                    title = summary.get_text(strip=True)
+            else:
+                header_el = pane.find(["h2", "h3", "h4", "h5", "strong", "button", "summary"])
+                if header_el:
+                    title = header_el.get_text(strip=True)
+                    
+        inner_content = pane.select_one(".product-tabs__pane-inner, .rte, .tab-inner, .content") or pane
+        body_text = inner_content.get_text(separator="\n", strip=True)
+        lines = [line.strip() for line in body_text.split("\n") if line.strip() and line.strip().lower() not in ("show more", "show less")]
+        clean_text = "\n".join(lines)
+        
+        if title and clean_text and len(title) < 50 and len(clean_text) > 5:
+            title_clean = title.strip().title()
+            if not any(ik in title_clean.lower() for ik in ignored_keywords) and not title_clean.isdigit():
+                extracted_tabs[title_clean] = clean_text
+
+    for btn in soup.select("button[role='tab'], .product-tabs__nav button, ul.tabs li"):
+        lbl = btn.get_text(strip=True)
+        controls = btn.get("aria-controls") or btn.get("data-tab") or btn.get("data-target")
+        if lbl and controls:
+            target_el = soup.find(id=controls.lstrip("#"))
+            if target_el:
+                body_txt = target_el.get_text(separator="\n", strip=True)
+                lines = [l.strip() for l in body_txt.split("\n") if l.strip() and l.strip().lower() not in ("show more", "show less")]
+                clean_text = "\n".join(lines)
+                title_clean = lbl.title()
+                if clean_text and len(lbl) < 50 and not any(ik in title_clean.lower() for ik in ignored_keywords) and not title_clean.isdigit():
+                    extracted_tabs[title_clean] = clean_text
+
+    return extracted_tabs
 
 def build_gemini_template_prompt(html_content: str) -> str:
     return f"""

@@ -665,24 +665,26 @@ export default function Index() {
   };
 
   const handleGenerateSchema = async () => {
-    if (!profileSampleUrl.trim()) {
-      shopify.toast.show("Please enter a Sample Product URL");
+    const urls = profileSampleUrl.split(/[\n,]/).map(u => u.trim()).filter(Boolean);
+    if (urls.length === 0) {
+      shopify.toast.show("Please enter at least one Sample Product URL");
       return;
     }
     setIsGeneratingSchema(true);
-    shopify.toast.show("Analyzing page and building extraction blueprint...");
+    shopify.toast.show(`Analyzing ${urls.length} product page(s) and building merged blueprint...`);
     try {
       const res = await fetch("/api/generate-schema", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: profileSampleUrl }),
+        body: JSON.stringify({ urls }),
       });
       const data = await res.json();
       if (data.success) {
         setSchemaProductResult(data.product);
         setSchemaRules(data.extraction_rules);
         setSchemaCandidates(data.candidates || []);
-        shopify.toast.show("Blueprint generated successfully!");
+        setIgnoredSchemaKeys({});
+        shopify.toast.show("Multi-category blueprint generated successfully!");
       } else {
         shopify.toast.show(`Failed: ${data.error}`);
       }
@@ -2555,49 +2557,72 @@ export default function Index() {
                       
                       {/* SCHEMA BUILDER UI */}
                       <div>
-                        <h4 style={{ fontSize: "13px", fontWeight: 600, color: "#202223", margin: "0 0 8px 0" }}>Product Schema Blueprint</h4>
+                        <h4 style={{ fontSize: "13px", fontWeight: 600, color: "#202223", margin: "0 0 8px 0" }}>Product Schema Blueprint (Multi-Example URLs)</h4>
                         <p style={{ fontSize: "12px", color: "#5c5f62", margin: "0 0 12px 0" }}>
-                          Provide a single product URL. The AI will extract the data and build deterministic CSS rules for this profile.
+                          Provide sample product URLs (one per line or comma-separated). The AI will analyze all example URLs across categories (e.g. Nails, Lip Balms, Wigs) and merge all tabs, options, and attributes into a single profile.
                         </p>
-                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
-                          <input
-                            type="url"
-                            placeholder="https://www.acme-electronics.com/products/sample"
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
+                          <textarea
+                            rows={3}
+                            placeholder="https://ivyusa.com/products/kiss-new-york-press-go-nails-chrome&#10;https://ivyusa.com/products/melting-jelly-lip-balm"
                             value={profileSampleUrl}
                             onChange={(e) => setProfileSampleUrl(e.target.value)}
                             style={{
-                              flex: 1,
+                              width: "100%",
                               padding: "8px 12px",
                               borderRadius: "4px",
                               border: "1px solid #bbb",
-                              fontSize: "13px",
+                              fontSize: "12px",
+                              fontFamily: "monospace",
                               boxSizing: "border-box",
+                              resize: "vertical"
                             }}
                           />
-                          <button
-                            type="button"
-                            onClick={handleGenerateSchema}
-                            disabled={isGeneratingSchema || !profileSampleUrl}
-                            style={{
-                              background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
-                              border: "none",
-                              borderRadius: "4px",
-                              padding: "0 16px",
-                              fontSize: "13px",
-                              fontWeight: 600,
-                              color: "white",
-                              cursor: (isGeneratingSchema || !profileSampleUrl) ? "not-allowed" : "pointer",
-                              opacity: (isGeneratingSchema || !profileSampleUrl) ? 0.7 : 1
-                            }}
-                          >
-                            {isGeneratingSchema ? "Analyzing..." : "Generate Schema"}
-                          </button>
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              onClick={handleGenerateSchema}
+                              disabled={isGeneratingSchema || !profileSampleUrl.trim()}
+                              style={{
+                                background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                                border: "none",
+                                borderRadius: "4px",
+                                padding: "8px 18px",
+                                fontSize: "13px",
+                                fontWeight: 600,
+                                color: "white",
+                                cursor: (isGeneratingSchema || !profileSampleUrl.trim()) ? "not-allowed" : "pointer",
+                                opacity: (isGeneratingSchema || !profileSampleUrl.trim()) ? 0.7 : 1
+                              }}
+                            >
+                              {isGeneratingSchema ? "Analyzing Multi-Category Pages..." : "✨ Analyze Example URLs & Build Schema"}
+                            </button>
+                          </div>
                         </div>
 
                         {schemaRules && schemaProductResult && (
                           <div style={{ background: "#f4f6f8", borderRadius: "8px", border: "1px solid #e1e3e5", overflow: "hidden" }}>
-                            <div style={{ padding: "12px", background: "#e1e3e5", borderBottom: "1px solid #c9cccf", fontSize: "12px", fontWeight: 600 }}>
-                              Schema Mapping Review
+                            {/* DISCOVERED ATTRIBUTES SURVEY HEADER */}
+                            <div style={{ padding: "12px 16px", background: "linear-gradient(90deg, #1c2260 0%, #005bd3 100%)", color: "white", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <div>
+                                <div style={{ fontSize: "13px", fontWeight: 700 }}>📋 Discovered Attributes Survey & Schema Type Selection</div>
+                                <div style={{ fontSize: "11px", opacity: 0.9, marginTop: "2px" }}>
+                                  Select the differentiating attributes required for your Shopify catalog. Unchecked attributes will be excluded.
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", gap: "6px" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setIgnoredSchemaKeys({})}
+                                  style={{ border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.2)", color: "white", padding: "4px 10px", borderRadius: "4px", fontSize: "11px", fontWeight: 600, cursor: "pointer" }}
+                                >
+                                  ✓ Select All
+                                </button>
+                              </div>
+                            </div>
+                            <div style={{ padding: "12px", background: "#e1e3e5", borderBottom: "1px solid #c9cccf", fontSize: "12px", fontWeight: 600, color: "#202223", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span>Schema Mapping Review</span>
+                              <span style={{ fontSize: "11px", color: "#5c5f62", fontWeight: 400 }}>Click '✕ Ignore' to exclude any specific attribute</span>
                             </div>
                             <div style={{ padding: "12px", maxHeight: "300px", overflowY: "auto" }}>
                               <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>

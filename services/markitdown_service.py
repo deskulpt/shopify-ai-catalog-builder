@@ -2760,54 +2760,94 @@ def extract_html_candidates(html_bytes: bytes) -> list:
 
 @app.route('/generate-schema', methods=['POST'])
 def generate_schema():
-    """Generates a product extraction schema and CSS rules for a given profile URL"""
+    """Generates a product extraction schema and CSS rules for given profile URL(s)"""
     data = request.get_json() or {}
     url = data.get('url', '')
+    urls = data.get('urls', [])
     
-    if not url:
+    # Consolidate URLs
+    url_list = []
+    if isinstance(urls, list) and len(urls) > 0:
+        url_list = [u.strip() for u in urls if u and isinstance(u, str) and u.strip()]
+    if not url_list and url:
+        url_list = [u.strip() for u in url.split(',') if u.strip()]
+        
+    if not url_list:
         return jsonify({'error': 'No URL provided'}), 400
         
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
     try:
-        html_bytes = fetch_html_rendered_bytes(url)
-        cleaned_html = preprocess_html_content(html_bytes)
-        candidates = extract_html_candidates(cleaned_html)
-        
-        result = None
-        if gemini_key:
-            try:
-                from auto_template import build_gemini_template_prompt
-                html_str = cleaned_html.decode('utf-8', errors='ignore') if isinstance(cleaned_html, bytes) else str(cleaned_html)
-                prompt = build_gemini_template_prompt(html_str)
-                result = extract_with_gemini(prompt)
-            except Exception as g_err:
-                print(f"Gemini schema generation error: {g_err}")
+        merged_product = None
+        merged_rules = {"metafields": {}}
+        all_candidates = []
 
-        if result and "extraction_rules" in result and result.get("product", {}).get("title"):
-            prod = result.get("product", {})
-            return jsonify({
-                "success": True,
-                "product": prod,
-                "extraction_rules": result.get("extraction_rules", {}),
-                "candidates": candidates
-            })
-            
-        # Deterministic Fallback Path (Guarantees Schema Generation Never Fails even if Gemini 429s)
-        fallback_product = apply_extraction_rules(cleaned_html, {})
-        fallback_rules = {
-            "title": {"selector": "h1, head > title, meta[property='og:title']", "attr": "text"},
-            "description": {"selector": ".product-description, meta[name='description'], meta[property='og:description']", "attr": "text"},
-            "price": {"selector": ".price, .product-price", "attr": "text"},
-            "images": {"selector": "meta[property='og:image'], .gallery img", "attr": "src"},
-            "metafields": {k: {"selector": "table, dl, .specs", "attr": "text"} for k in fallback_product.get("metafields", {})}
-        }
-        
+        for target_url in url_list:
+            try:
+                html_bytes = fetch_html_rendered_bytes(target_url)
+                cleaned_html = preprocess_html_content(html_bytes)
+                candidates = extract_html_candidates(cleaned_html)
+                all_candidates.extend(candidates)
+                
+                result = None
+                if gemini_key:
+                    try:
+                        from auto_template import build_gemini_template_prompt
+                        html_str = cleaned_html.decode('utf-8', errors='ignore') if isinstance(cleaned_html, bytes) else str(cleaned_html)
+                        prompt = build_gemini_template_prompt(html_str)
+                        result = extract_with_gemini(prompt)
+                    except Exception as g_err:
+                        print(f"Gemini schema generation error for {target_url}: {g_err}")
+
+                if result and "extraction_rules" in result and result.get("product", {}).get("title"):
+                    prod = result.get("product", {})
+                    rules = result.get("extraction_rules", {})
+                else:
+                    prod = apply_extraction_rules(cleaned_html, {})
+                    rules = {
+                        "title": {"selector": "h1, head > title, meta[property='og:title']", "attr": "text"},
+                        "description": {"selector": ".product-description, meta[name='description'], meta[property='og:description']", "attr": "text"},
+                        "price": {"selector": ".price, .product-price", "attr": "text"},
+                        "images": {"selector": "meta[property='og:image'], .gallery img", "attr": "src"},
+                        "metafields": {k: {"selector": "table, dl, .specs, [role='tabpanel']", "attr": "text"} for k in prod.get("metafields", {})}
+                    }
+
+                if not merged_product:
+                    merged_product = prod
+                else:
+                    # Merge metafields & options
+                    existing_meta = merged_product.get("metafields", {})
+                    for mk, mv in prod.get("metafields", {}).items():
+                        if mk not in existing_meta:
+                            existing_meta[mk] = mv
+                    merged_product["metafields"] = existing_meta
+
+                    # Merge options
+                    existing_opts = {o.get("name"): o for o in merged_product.get("options", [])}
+                    for opt in prod.get("options", []):
+                        oname = opt.get("name")
+                        if oname and oname not in existing_opts:
+                            merged_product.setdefault("options", []).append(opt)
+
+                # Merge extraction rules
+                for rk, rv in rules.items():
+                    if rk == "metafields" and isinstance(rv, dict):
+                        for mk, mv in rv.items():
+                            merged_rules["metafields"][mk] = mv
+                    elif rk not in merged_rules:
+                        merged_rules[rk] = rv
+                        
+            except Exception as item_err:
+                print(f"Error extracting schema for {target_url}: {item_err}")
+
+        if not merged_product:
+            return jsonify({'error': 'Failed to extract product schema from provided URLs'}), 500
+
         return jsonify({
             "success": True,
-            "product": fallback_product,
-            "extraction_rules": fallback_rules,
-            "candidates": candidates
+            "product": merged_product,
+            "extraction_rules": merged_rules,
+            "candidates": all_candidates[:30]
         })
 
     except Exception as e:
