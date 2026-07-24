@@ -1069,11 +1069,10 @@ export default function Index() {
     const overrides = customOverrides || groupCollectionOverride;
 
     if (groupSimilar) {
-      crawlResult.categories.forEach((cat: any) => {
-        const groups = groupedCategories[cat.name] || [];
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
         groups.forEach((group: any, groupIdx: number) => {
           group.variants.forEach((variant: any, variantIdx: number) => {
-            const key = `${cat.name}::grouped::${groupIdx}::${variantIdx}`;
+            const key = `${catName}::grouped::${groupIdx}::${variantIdx}`;
             if (selectedProducts.includes(key)) {
               if (addedUrls.has(variant.url)) return;
               addedUrls.add(variant.url);
@@ -1087,8 +1086,8 @@ export default function Index() {
                 collectionId = overrides[group.title];
               } else if (group.collection_match) {
                 collectionId = group.collection_match.id;
-              } else {
-                const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === cat.name.toLowerCase());
+              } else if (catName !== "Unmatched Products") {
+                const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === catName.toLowerCase());
                 if (existingCol) collectionId = existingCol.id;
               }
 
@@ -1112,9 +1111,9 @@ export default function Index() {
         });
       });
     } else {
-      crawlResult.categories.forEach((cat: any) => {
-        (cat.products || []).forEach((prod: any, prodIdx: number) => {
-          const key = `${cat.name}::standalone::${prodIdx}`;
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
+        groups.flatMap((g: any) => g.variants).forEach((prod: any, prodIdx: number) => {
+          const key = `${catName}::standalone::${prodIdx}`;
           if (selectedProducts.includes(key)) {
             if (addedUrls.has(prod.url)) return;
             addedUrls.add(prod.url);
@@ -1124,8 +1123,8 @@ export default function Index() {
             let collectionId: string | undefined = undefined;
             if (overrides[prod.name]) {
               collectionId = overrides[prod.name];
-            } else {
-              const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === cat.name.toLowerCase());
+            } else if (catName !== "Unmatched Products") {
+              const existingCol = shopifyCollections.find(c => c.title.toLowerCase() === catName.toLowerCase());
               if (existingCol) collectionId = existingCol.id;
             }
 
@@ -1189,11 +1188,10 @@ export default function Index() {
     });
 
     if (groupSimilar) {
-      crawlResult.categories.forEach((cat: any) => {
-        const groups = groupedCategories[cat.name] || [];
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
         groups.forEach((group: any, groupIdx: number) => {
           const hasSelected = group.variants.some((v: any, variantIdx: number) =>
-            selectedProducts.includes(`${cat.name}::grouped::${groupIdx}::${variantIdx}`)
+            selectedProducts.includes(`${catName}::grouped::${groupIdx}::${variantIdx}`)
           );
           if (hasSelected) {
             const overrideId = groupCollectionOverride[group.title];
@@ -1213,32 +1211,32 @@ export default function Index() {
               }
             } else if (group.collection_match) {
               collectionIdMap[group.title] = group.collection_match.id;
-            } else {
-              const existingId = shopifyCollectionsMap[cat.name.toLowerCase()];
+            } else if (catName !== "Unmatched Products") {
+              const existingId = shopifyCollectionsMap[catName.toLowerCase()];
               if (existingId) {
-                collectionIdMap[cat.name] = existingId;
+                collectionIdMap[catName] = existingId;
               } else {
-                titlesToCreate.add(cat.name);
+                titlesToCreate.add(catName);
               }
             }
           }
         });
       });
     } else {
-      crawlResult.categories.forEach((cat: any) => {
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
         let hasSelected = false;
-        (cat.products || []).forEach((p: any, prodIdx: number) => {
-          const key = `${cat.name}::standalone::${prodIdx}`;
+        groups.flatMap((g: any) => g.variants).forEach((p: any, prodIdx: number) => {
+          const key = `${catName}::standalone::${prodIdx}`;
           if (selectedProducts.includes(key)) {
             hasSelected = true;
           }
         });
-        if (hasSelected) {
-          const existingId = shopifyCollectionsMap[cat.name.toLowerCase()];
+        if (hasSelected && catName !== "Unmatched Products") {
+          const existingId = shopifyCollectionsMap[catName.toLowerCase()];
           if (existingId) {
-            collectionIdMap[cat.name] = existingId;
+            collectionIdMap[catName] = existingId;
           } else {
-            titlesToCreate.add(cat.name);
+            titlesToCreate.add(catName);
           }
         }
       });
@@ -1282,11 +1280,10 @@ export default function Index() {
 
     const newOverrides = { ...groupCollectionOverride };
     if (groupSimilar) {
-      crawlResult.categories.forEach((cat: any) => {
-        const groups = groupedCategories[cat.name] || [];
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
         groups.forEach((group: any, groupIdx: number) => {
           const hasSelected = group.variants.some((v: any, variantIdx: number) =>
-            selectedProducts.includes(`${cat.name}::grouped::${groupIdx}::${variantIdx}`)
+            selectedProducts.includes(`${catName}::grouped::${groupIdx}::${variantIdx}`)
           );
           if (hasSelected) {
             const overrideId = groupCollectionOverride[group.title];
@@ -1302,8 +1299,8 @@ export default function Index() {
               }
             } else if (group.collection_match) {
               finalId = group.collection_match.id;
-            } else {
-              finalId = collectionIdMap[cat.name];
+            } else if (catName !== "Unmatched Products") {
+              finalId = collectionIdMap[catName];
             }
 
             if (finalId) {
@@ -1315,11 +1312,11 @@ export default function Index() {
         });
       });
     } else {
-      crawlResult.categories.forEach((cat: any) => {
-        const finalId = collectionIdMap[cat.name];
+      Object.entries(groupedCategories).forEach(([catName, groups]) => {
+        const finalId = collectionIdMap[catName];
         if (finalId) {
-          (cat.products || []).forEach((p: any, prodIdx: number) => {
-            const key = `${cat.name}::standalone::${prodIdx}`;
+          groups.flatMap((g: any) => g.variants).forEach((p: any, prodIdx: number) => {
+            const key = `${catName}::standalone::${prodIdx}`;
             if (selectedProducts.includes(key)) {
               newOverrides[p.name] = finalId;
             }
