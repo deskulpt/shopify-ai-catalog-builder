@@ -85,8 +85,10 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
 
         product["description"] = desc_val
 
-        # 3. Price Extraction with Fallbacks
+        # 3. Price & Sale Price / Compare-At Price Extraction
         price_val = "0.00"
+        compare_at_price_val = ""
+        
         if "price" in rules and isinstance(rules["price"], dict):
             rule = rules["price"]
             sel = rule.get("selector", "")
@@ -108,6 +110,14 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                 price_val = price_match.group(1)
 
         product["price"] = price_val
+
+        # Compare at / Original Price
+        compare_el = soup.select_one(".compare-at-price, .was-price, .original-price, del, strike, s, .price--compare")
+        if compare_el:
+            c_match = re.search(r'[\d,\.]+', compare_el.get_text(strip=True))
+            if c_match:
+                compare_at_price_val = c_match.group(0)
+        product["compare_at_price"] = compare_at_price_val
 
         # 4. Images Extraction with Fallbacks
         images = []
@@ -148,7 +158,7 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                 except Exception:
                     pass
 
-        # 6. Metafields / Specifications Extraction
+        # 6. Metafields / Specifications / Ingredients / Key-Value Extraction
         metafields = {}
         meta_rules = (rules.get("metafields") or {}) if isinstance(rules.get("metafields"), dict) else {}
         for mk, mrule in meta_rules.items():
@@ -160,13 +170,21 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                 except Exception:
                     pass
 
-        if not metafields:
-            for row in soup.select("table tr, dl"):
-                cells = row.select("td, th, dt, dd")
-                if len(cells) >= 2:
-                    k = cells[0].get_text(strip=True).rstrip(":")
-                    v = cells[1].get_text(strip=True)
-                    if k and v and len(k) < 40:
+        # Extract structured key-value pairs from tables, definition lists, and strong list items
+        for row in soup.select("table tr, dl, ul.product-attributes, .specs-list, .product-details li, .ingredients-list"):
+            cells = row.select("td, th, dt, dd, strong, b, span")
+            if len(cells) >= 2:
+                k = cells[0].get_text(strip=True).rstrip(":")
+                v = cells[1].get_text(strip=True)
+                if k and v and 3 <= len(k) <= 40 and k.lower() not in ('price', 'title', 'sku', 'description'):
+                    metafields[k] = v
+            elif row.name == 'li' and (':' in row.get_text() or '-' in row.get_text()):
+                txt = row.get_text(strip=True)
+                if ':' in txt:
+                    parts = txt.split(':', 1)
+                    k = parts[0].strip().rstrip(":")
+                    v = parts[1].strip()
+                    if k and v and 3 <= len(k) <= 40:
                         metafields[k] = v
 
         product["metafields"] = metafields
@@ -182,7 +200,7 @@ def build_gemini_template_prompt(html_content: str) -> str:
     Also generate robust CSS selectors to extract each field and attribute deterministically.
 
     CRITICAL REQUIREMENTS:
-    1. EXPACT ALL SPECIFICATIONS & ATTRIBUTES: Look for specification tables, swatch lists, metadata key-value pairs (e.g. Hair Material, Texture, Style, Colors Shown, Available Colors, Lengths, Material, Weight, Dimensions, etc.) and put them into "metafields".
+    1. EXTRACT ALL SPECIFICATIONS & ATTRIBUTES: Look for pricing, compare-at / original prices, detailed descriptions, ingredients, materials, care instructions, usage directions, dimensions, weight, swatch lists, and metadata key-value pairs (e.g. Hair Material, Texture, Style, Colors Shown, Available Colors, Lengths, Ingredients, Material, Weight, Dimensions, etc.) and put them into "metafields".
     2. EXTRACT ALL OPTIONS & VARIANTS: Extract every product option (e.g. Color, Length, Size) into "options" AND every individual variant combination into "variants" (with price, sku, image_url, availability, optionValues).
     3. GENERATE EXTRACTION RULES: Under "extraction_rules", provide CSS selectors for core fields AND for every custom specification key found under metafields!
 
@@ -198,9 +216,11 @@ def build_gemini_template_prompt(html_content: str) -> str:
          "sku": "Base SKU",
          "description": "Main product description",
          "description_sections": [
-           {{"title": "Overview", "content": "..."}}
+           {{"title": "Overview", "content": "..."}},
+           {{"title": "Ingredients", "content": "..."}}
          ],
          "metafields": {{
+           "Ingredients": "Purified Water, Glycerin...",
            "Hair Material": "UNPROCESSED HUMAN HAIR",
            "Texture": "SILKY",
            "Style": "CURLY",
@@ -228,9 +248,11 @@ def build_gemini_template_prompt(html_content: str) -> str:
       "extraction_rules": {{
          "title": {{"selector": "h1.product-title", "attr": "text"}},
          "price": {{"selector": ".price", "attr": "text"}},
+         "compare_at_price": {{"selector": ".compare-at-price", "attr": "text"}},
          "description": {{"selector": ".description", "attr": "text"}},
          "images": {{"selector": ".gallery img", "attr": "src", "multiple": true}},
          "metafields": {{
+            "Ingredients": {{"selector": ".ingredients", "attr": "text"}},
             "Hair Material": {{"selector": ".spec-hair-material", "attr": "text"}},
             "Texture": {{"selector": ".spec-texture", "attr": "text"}},
             "Style": {{"selector": ".spec-style", "attr": "text"}},
