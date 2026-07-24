@@ -969,17 +969,21 @@ export default function Index() {
     }));
   };
 
-  const handleCategorySelectToggle = (category: any, checked: boolean) => {
+  const handleCategorySelectToggle = (catName: string, groups: any[], checked: boolean) => {
     const catKeys: string[] = [];
-    if (groupSimilar && groupedCategories[category.name]) {
-      groupedCategories[category.name].forEach((group: any, groupIdx: number) => {
+    if (groupSimilar) {
+      groups.forEach((group: any, groupIdx: number) => {
         group.variants.forEach((v: any, variantIdx: number) => {
-          catKeys.push(`${category.name}::grouped::${groupIdx}::${variantIdx}`);
+          catKeys.push(`${catName}::grouped::${groupIdx}::${variantIdx}`);
         });
       });
     } else {
-      (category.products || []).forEach((p: any, prodIdx: number) => {
-        catKeys.push(`${category.name}::standalone::${prodIdx}`);
+      let flatIdx = 0;
+      groups.forEach((group: any) => {
+        group.variants.forEach((v: any) => {
+          catKeys.push(`${catName}::standalone::${flatIdx}`);
+          flatIdx++;
+        });
       });
     }
     
@@ -1392,62 +1396,69 @@ export default function Index() {
           if (colData.success && colData.collections) {
             setShopifyCollections(colData.collections);
             collections = colData.collections;
-            }
-            } catch (_) {
-            /* ponytail: collections fetch failed — fall through with currentCollections */
-            }
-      }
-
-      for (const category of crawlData.categories) {
-        const catProducts = category.products || [];
-        if (catProducts.length <= 1) {
-          newGroupedCats[category.name] = catProducts.map((p: any) => ({
-            title: p.name,
-            is_grouped: false,
-            variants: [p],
-            collection_match: null,
-          }));
-          totalStats.total += catProducts.length;
-          totalStats.new += catProducts.length;
-          continue;
-        }
-
-        try {
-          const res = await fetch("/api/group-variants", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ products: catProducts, collections }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            newGroupedCats[category.name] = data.grouped;
-            if (data.stats) {
-              totalStats.total += data.stats.total;
-              totalStats.matched += data.stats.matched;
-              totalStats.new += data.stats.new;
-            }
-          } else {
-            newGroupedCats[category.name] = catProducts.map((p: any) => ({
-              title: p.name,
-              is_grouped: false,
-              variants: [p],
-              collection_match: null,
-            }));
-            totalStats.total += catProducts.length;
-            totalStats.new += catProducts.length;
           }
-        } catch (innerErr) {
-          console.error("Failed to group variants for category:", category.name, innerErr);
-          newGroupedCats[category.name] = catProducts.map((p: any) => ({
-            title: p.name,
-            is_grouped: false,
-            variants: [p],
-            collection_match: null,
-          }));
-          totalStats.total += catProducts.length;
-          totalStats.new += catProducts.length;
+        } catch (_) {
+          /* ponytail: collections fetch failed — fall through with currentCollections */
         }
       }
+
+      // 1. Flatten all products from all scraped categories
+      const allProducts = crawlData.categories.flatMap((c: any) => c.products || []);
+
+      if (allProducts.length === 0) {
+        setGroupedCategories({});
+        setGroupingStats({ total: 0, matched: 0, newCount: 0 });
+        setIsGrouping(false);
+        return;
+      }
+
+      try {
+        // 2. Send in one massive batch
+        const res = await fetch("/api/group-variants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ products: allProducts, collections }),
+        });
+        const data = await res.json();
+        
+        const groupedResults = data.success ? data.grouped : allProducts.map((p: any) => ({
+          title: p.name,
+          is_grouped: false,
+          variants: [p],
+          collection_match: null,
+        }));
+
+        if (data.success && data.stats) {
+          totalStats.total = data.stats.total;
+          totalStats.matched = data.stats.matched;
+          totalStats.new = data.stats.new;
+        } else {
+          totalStats.total = allProducts.length;
+          totalStats.new = allProducts.length;
+        }
+
+        // 3. Distribute grouped results by collection_match (or "Unmatched Products")
+        groupedResults.forEach((group: any) => {
+          const catName = group.collection_match ? group.collection_match.title : "Unmatched Products";
+          if (!newGroupedCats[catName]) {
+            newGroupedCats[catName] = [];
+          }
+          newGroupedCats[catName].push(group);
+        });
+
+      } catch (innerErr) {
+        console.error("Failed to group variants globally", innerErr);
+        // Fallback: put everything in "Unmatched Products"
+        newGroupedCats["Unmatched Products"] = allProducts.map((p: any) => ({
+          title: p.name,
+          is_grouped: false,
+          variants: [p],
+          collection_match: null,
+        }));
+        totalStats.total = allProducts.length;
+        totalStats.new = allProducts.length;
+      }
+
       setGroupedCategories(newGroupedCats);
       setGroupingStats({ total: totalStats.total, matched: totalStats.matched, newCount: totalStats.new });
 
@@ -1461,8 +1472,10 @@ export default function Index() {
         });
       });
       setSelectedProducts(allGroupedKeys);
+      setExpandedCategories(Object.keys(newGroupedCats).reduce((acc: any, key) => { acc[key] = true; return acc; }, {}));
+      
     } catch (err) {
-      shopify.toast.show("Error grouping variants");
+      console.error("Failed to perform grouping", err);
     } finally {
       setIsGrouping(false);
     }
@@ -2013,14 +2026,18 @@ export default function Index() {
     shopify.toast.show(`Split into ${newSources.length} individual products`);
   };
 
-  const handleGroupToggle = async (checked: boolean) => {
+  const handleGroupSimilarToggle = async (checked: boolean) => {
     setGroupSimilar(checked);
     if (!checked) {
       if (crawlResult) {
         const allStandaloneKeys: string[] = [];
-        crawlResult.categories.forEach((cat: any) => {
-          (cat.products || []).forEach((p: any, prodIdx: number) => {
-            allStandaloneKeys.push(`${cat.name}::standalone::${prodIdx}`);
+        Object.entries(groupedCategories).forEach(([catName, groups]) => {
+          let flatIdx = 0;
+          groups.forEach((group: any) => {
+            group.variants.forEach((v: any) => {
+              allStandaloneKeys.push(`${catName}::standalone::${flatIdx}`);
+              flatIdx++;
+            });
           });
         });
         setSelectedProducts(allStandaloneKeys);
@@ -2028,96 +2045,9 @@ export default function Index() {
       return;
     }
     if (!crawlResult) return;
-
-    setIsGrouping(true);
-    const newGroupedCats: Record<string, any[]> = {};
-    const totalStats = { total: 0, matched: 0, new: 0 };
-
-    try {
-      // Step 1: Fetch existing Shopify collections once
-      let collections: {id: string; title: string}[] = shopifyCollections;
-      if (collections.length === 0) {
-        try {
-          const colRes = await fetch("/api/collections");
-          const colData = await colRes.json();
-          if (colData.success && colData.collections) {
-            setShopifyCollections(colData.collections);
-            collections = colData.collections;
-          }
-        } catch (_) {
-          // Proceed without collections
-        }
-      }
-
-      // Step 2: Group each category, passing the collections for matching
-      for (const category of crawlResult.categories) {
-        const catProducts = category.products || [];
-        if (catProducts.length <= 1) {
-          newGroupedCats[category.name] = catProducts.map((p: any) => ({
-            title: p.name,
-            is_grouped: false,
-            variants: [p],
-            collection_match: null,
-          }));
-          totalStats.total += catProducts.length;
-          totalStats.new += catProducts.length;
-          continue;
-        }
-
-        try {
-          const res = await fetch("/api/group-variants", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ products: catProducts, collections }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            newGroupedCats[category.name] = data.grouped;
-            if (data.stats) {
-              totalStats.total += data.stats.total;
-              totalStats.matched += data.stats.matched;
-              totalStats.new += data.stats.new;
-            }
-          } else {
-            newGroupedCats[category.name] = catProducts.map((p: any) => ({
-              title: p.name,
-              is_grouped: false,
-              variants: [p],
-              collection_match: null,
-            }));
-            totalStats.total += catProducts.length;
-            totalStats.new += catProducts.length;
-          }
-        } catch (innerErr) {
-          console.error("Failed to group variants in toggle for category:", category.name, innerErr);
-          newGroupedCats[category.name] = catProducts.map((p: any) => ({
-            title: p.name,
-            is_grouped: false,
-            variants: [p],
-            collection_match: null,
-          }));
-          totalStats.total += catProducts.length;
-          totalStats.new += catProducts.length;
-        }
-      }
-      setGroupedCategories(newGroupedCats);
-      setGroupingStats({ total: totalStats.total, matched: totalStats.matched, newCount: totalStats.new });
-
-      // Auto-select all grouped variants with path keys
-      const allGroupedKeys: string[] = [];
-      Object.entries(newGroupedCats).forEach(([catName, groups]) => {
-        groups.forEach((group: any, groupIdx: number) => {
-          group.variants.forEach((v: any, variantIdx: number) => {
-            allGroupedKeys.push(`${catName}::grouped::${groupIdx}::${variantIdx}`);
-          });
-        });
-      });
-      setSelectedProducts(allGroupedKeys);
-    } catch (err) {
-      shopify.toast.show("Error grouping variants");
-    } finally {
-      setIsGrouping(false);
-    }
+    
+    // Grouping is on, call our new flattened grouping logic
+    await performGroupingForData(crawlResult, shopifyCollections);
   };
 
   const toggleGroupExpand = (groupTitle: string) => {
@@ -3460,20 +3390,23 @@ export default function Index() {
 
                 <div style={{ paddingLeft: "10px" }}>
 
-                  {crawlResult.categories.map((category: any) => {
-                    const isCatExpanded = !!expandedCategories[category.name];
-                    const catProducts = category.products || [];
-                    
+                  {Object.entries(groupedCategories).map(([catName, groups]) => {
+                    const isCatExpanded = !!expandedCategories[catName];
                     const catKeysForCat: string[] = [];
-                    if (groupSimilar && groupedCategories[category.name]) {
-                      groupedCategories[category.name].forEach((group: any, groupIdx: number) => {
+                    
+                    if (groupSimilar) {
+                      groups.forEach((group: any, groupIdx: number) => {
                         group.variants.forEach((v: any, variantIdx: number) => {
-                          catKeysForCat.push(`${category.name}::grouped::${groupIdx}::${variantIdx}`);
+                          catKeysForCat.push(`${catName}::grouped::${groupIdx}::${variantIdx}`);
                         });
                       });
                     } else {
-                      catProducts.forEach((p: any, prodIdx: number) => {
-                        catKeysForCat.push(`${category.name}::standalone::${prodIdx}`);
+                      let flatIdx = 0;
+                      groups.forEach((group: any) => {
+                        group.variants.forEach((v: any) => {
+                          catKeysForCat.push(`${catName}::standalone::${flatIdx}`);
+                          flatIdx++;
+                        });
                       });
                     }
 
@@ -3481,12 +3414,15 @@ export default function Index() {
                     const isAllSelected = catKeysForCat.length > 0 && selectedInCat.length === catKeysForCat.length;
                     const isSomeSelected = selectedInCat.length > 0 && !isAllSelected;
 
+                    // Calculate total products in this category
+                    const productCount = groups.reduce((acc: number, group: any) => acc + (group.variants ? group.variants.length : 0), 0);
+
                     return (
-                      <div key={category.name} style={{ marginBottom: "10px", borderBottom: "1px solid #f4f6f8", paddingBottom: "10px" }}>
+                      <div key={catName} style={{ marginBottom: "10px", borderBottom: "1px solid #f4f6f8", paddingBottom: "10px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                           <button
                             type="button"
-                            onClick={() => toggleCategoryExpand(category.name)}
+                            onClick={() => toggleCategoryExpand(catName)}
                             style={{
                               border: "none",
                               background: "transparent",
@@ -3506,22 +3442,22 @@ export default function Index() {
                             ref={el => {
                               if (el) el.indeterminate = isSomeSelected;
                             }}
-                            onChange={(e) => handleCategorySelectToggle(category, e.target.checked)}
+                            onChange={(e) => handleCategorySelectToggle(catName, groups, e.target.checked)}
                             style={{ cursor: "pointer", width: "16px", height: "16px" }}
                           />
                           <strong style={{ fontSize: "14px", color: "#202223" }}>
-                            {category.name} ({category.product_count} products)
+                            {catName} ({productCount} products)
                           </strong>
                         </div>
 
                         {isCatExpanded && (
                           <div style={{ paddingLeft: "30px", marginTop: "8px" }}>
-                            {groupSimilar && groupedCategories[category.name] ? (
-                              (groupedCategories[category.name] || []).map((group: any, groupIdx: number) => {
+                            {groupSimilar ? (
+                              groups.map((group: any, groupIdx: number) => {
                                 if (group.is_grouped) {
                                   const isGroupExpanded = !!expandedGroups[group.title];
                                   const groupKeys = group.variants.map((v: any, variantIdx: number) => 
-                                    `${category.name}::grouped::${groupIdx}::${variantIdx}`
+                                    `${catName}::grouped::${groupIdx}::${variantIdx}`
                                   );
                                   const selectedInGroup = selectedProducts.filter(key => groupKeys.includes(key));
                                   const isAllGroupSelected = selectedInGroup.length === groupKeys.length;
@@ -3553,7 +3489,7 @@ export default function Index() {
                                           ref={el => {
                                             if (el) el.indeterminate = isSomeGroupSelected;
                                           }}
-                                          onChange={(e) => handleGroupSelectToggle(category.name, groupIdx, group, e.target.checked)}
+                                          onChange={(e) => handleGroupSelectToggle(catName, groupIdx, group, e.target.checked)}
                                           style={{ cursor: "pointer", width: "14px", height: "14px", marginTop: "6px" }}
                                         />
                                         <div style={{ flex: 1 }}>
@@ -3733,7 +3669,7 @@ export default function Index() {
                                       {isGroupExpanded && (
                                         <div style={{ paddingLeft: "45px", marginTop: "6px" }}>
                                           {group.variants.map((variant: any, variantIdx: number) => {
-                                            const pathKey = `${category.name}::grouped::${groupIdx}::${variantIdx}`;
+                                            const pathKey = `${catName}::grouped::${groupIdx}::${variantIdx}`;
                                             const isChecked = selectedProducts.includes(pathKey);
                                             return (
                                               <div key={pathKey} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
@@ -3758,7 +3694,7 @@ export default function Index() {
                                   );
                                 } else {
                                   const standalone = group.variants[0];
-                                  const pathKey = `${category.name}::grouped::${groupIdx}::0`;
+                                  const pathKey = `${catName}::grouped::${groupIdx}::0`;
                                   const isChecked = selectedProducts.includes(pathKey);
                                   const collMatch = group.collection_match;
                                   const overrideId = groupCollectionOverride[standalone.name];
@@ -3849,8 +3785,8 @@ export default function Index() {
                                 }
                               })
                             ) : (
-                              catProducts.map((prod: any, prodIdx: number) => {
-                                const pathKey = `${category.name}::standalone::${prodIdx}`;
+                              groups.flatMap((g: any) => g.variants).map((prod: any, prodIdx: number) => {
+                                const pathKey = `${catName}::standalone::${prodIdx}`;
                                 const isChecked = selectedProducts.includes(pathKey);
                                 return (
                                   <div key={pathKey} style={{ display: "flex", alignItems: "center", gap: "10px", margin: "4px 0" }}>
