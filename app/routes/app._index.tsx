@@ -1651,10 +1651,31 @@ export default function Index() {
     });
   };
 
-  const handleOpenReviewModal = () => {
-    if (!extractedProduct) return;
+  const handleOpenReviewModal = (targetSourceId?: string) => {
+    const sId = targetSourceId || selectedSourceId;
+    if (targetSourceId && targetSourceId !== selectedSourceId) {
+      setSelectedSourceId(targetSourceId);
+    }
+
+    const selectedSource = queuedSources.find(s => s.id === sId);
+    const prod = (selectedSource?.extractedData) || extractedProduct;
+    const mdContent = selectedSource?.markdown || editingMarkdown || "";
     
-    const selectedSource = queuedSources.find(s => s.id === selectedSourceId);
+    const effectiveProd = prod || (mdContent ? parseMarkdownToProduct(mdContent) : null);
+    if (!effectiveProd && !mdContent) return;
+
+    const finalProd = effectiveProd || {
+      title: selectedSource?.name || "Extracted Product",
+      short_description: "",
+      sku: "",
+      price: "0.00",
+      specifications: [],
+      media_links: [],
+      file_links: []
+    };
+    
+    setExtractedProduct(finalProd);
+
     if (selectedSource?.overwriteOptions) {
       setReviewOverwriteTitle(selectedSource.overwriteOptions.title);
       setReviewOverwriteDescription(selectedSource.overwriteOptions.description);
@@ -1665,30 +1686,30 @@ export default function Index() {
       setReviewOverwriteVariants(true);
     }
 
-    setReviewTitle(extractedProduct.title || "");
-    setReviewDescription(extractedProduct.short_description || "");
-    setReviewSku(extractedProduct.sku || "");
-    setReviewPrice(extractedProduct.price || "0.00");
-    setReviewCurrency(extractedProduct.currency || "USD");
-    setReviewPriceUnit(extractedProduct.price_unit || "");
-    setReviewPurchaseType(extractedProduct.purchase_type || "direct_buy");
+    setReviewTitle(finalProd.title || "");
+    setReviewDescription(finalProd.short_description || finalProd.description || "");
+    setReviewSku(finalProd.sku || "");
+    setReviewPrice(finalProd.price || "0.00");
+    setReviewCurrency(finalProd.currency || "USD");
+    setReviewPriceUnit(finalProd.price_unit || "");
+    setReviewPurchaseType(finalProd.purchase_type || "direct_buy");
     
-    const specs = (extractedProduct.specifications || []).map((s: any) => ({
+    const specs = (finalProd.specifications || []).map((s: any) => ({
       name: s.name,
       value: s.displayValue || (s.value !== null && s.value !== undefined ? (s.unit ? `${s.value} ${s.unit}` : String(s.value)) : String(s.rawValue)),
       selected: true,
     }));
     setReviewSpecs(specs);
 
-    const media = (extractedProduct.media_links || []).map((m: any) => ({
-      url: m.url,
-      alt: m.alt || "",
+    const media = (finalProd.media_links || finalProd.images || []).map((m: any) => ({
+      url: typeof m === "string" ? m : m.url,
+      alt: typeof m === "string" ? "" : (m.alt || ""),
       selected: true,
     }));
     setReviewMediaLinks(media);
     setReviewHeroImageIdx(0);
 
-    const files = (extractedProduct.file_links || []).map((f: any) => ({
+    const files = (finalProd.file_links || []).map((f: any) => ({
       url: f.url,
       text: f.text || "",
       selected: true,
@@ -1696,7 +1717,7 @@ export default function Index() {
     }));
     setReviewFileLinks(files);
     
-    const parsed = parseVariantsFromMarkdown(editingMarkdown, extractedProduct.sku || "");
+    const parsed = parseVariantsFromMarkdown(mdContent, finalProd.sku || "");
     if (parsed) {
       setReviewOptions(parsed.options);
       setReviewOptionsText(parsed.options.map(o => o.values.join(", ")));
@@ -4284,18 +4305,22 @@ export default function Index() {
                           <div style={{ display: "flex", gap: "8px" }}>
                             <button
                               type="button"
-                              onClick={() => setSelectedSourceId(source.id)}
+                              onClick={() => handleOpenReviewModal(source.id)}
                               style={{
-                                padding: "4px 8px",
+                                padding: "4px 10px",
                                 fontSize: "12px",
-                                fontWeight: 500,
+                                fontWeight: 600,
                                 borderRadius: "4px",
-                                border: "1px solid #c9cccf",
-                                background: "white",
-                                cursor: "pointer"
+                                border: "1px solid #008060",
+                                background: "#f0fdf4",
+                                color: "#008060",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px"
                               }}
                             >
-                              View
+                              👁️ View & Review
                             </button>
                             <button
                               type="button"
@@ -4326,6 +4351,30 @@ export default function Index() {
           {/* Right Column: Source Preview Section */}
           <div style={{ flex: "1 1 48%", minWidth: "500px" }}>
             <s-section heading={`📝 Preview: ${selectedSource ? selectedSource.name.replace(/^✓ /, "") : "Select a Source"}`}>
+              {selectedSource && (
+                <div style={{ marginBottom: "12px", display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenReviewModal(selectedSource.id)}
+                    style={{
+                      padding: "8px 16px",
+                      fontSize: "13px",
+                      fontWeight: 700,
+                      borderRadius: "6px",
+                      border: "none",
+                      background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                      color: "white",
+                      cursor: "pointer",
+                      boxShadow: "0 2px 6px rgba(0,128,96,0.2)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px"
+                    }}
+                  >
+                    🚀 Review & Publish Individual Product
+                  </button>
+                </div>
+              )}
               <div style={{ padding: "4px" }}>
                 {selectedSource ? (
                   <div>
