@@ -428,6 +428,12 @@ export default function Index() {
   const [isDetectingPatterns, setIsDetectingPatterns] = useState(false);
   const [detectedCategoryExample, setDetectedCategoryExample] = useState("");
   const [detectedProductExample, setDetectedProductExample] = useState("");
+  
+  const [profileSampleUrl, setProfileSampleUrl] = useState("");
+  const [isGeneratingSchema, setIsGeneratingSchema] = useState(false);
+  const [schemaCandidates, setSchemaCandidates] = useState<any[]>([]);
+  const [schemaProductResult, setSchemaProductResult] = useState<any>(null);
+  const [schemaRules, setSchemaRules] = useState<any>(null);
 
   const [crawlUrlInput, setCrawlUrlInput] = useState("");
   const [customProductPattern, setCustomProductPattern] = useState("");
@@ -499,6 +505,12 @@ export default function Index() {
 
     // 2. Switch selectedProfileId
     setSelectedProfileId(id);
+    
+    // Clear schema state
+    setProfileSampleUrl("");
+    setSchemaProductResult(null);
+    setSchemaRules(null);
+    setSchemaCandidates([]);
 
     // 3. Load from new key
     const newKey = id 
@@ -632,7 +644,37 @@ export default function Index() {
     } catch (e: any) {
       shopify.toast.show(`Auto-detect failed: ${e.message}`);
     } finally {
+    } finally {
       setIsDetectingPatterns(false);
+    }
+  };
+
+  const handleGenerateSchema = async () => {
+    if (!profileSampleUrl.trim()) {
+      shopify.toast.show("Please enter a Sample Product URL");
+      return;
+    }
+    setIsGeneratingSchema(true);
+    shopify.toast.show("Analyzing page and building extraction blueprint...");
+    try {
+      const res = await fetch("http://localhost:5005/generate-schema", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: profileSampleUrl }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSchemaProductResult(data.product);
+        setSchemaRules(data.extraction_rules);
+        setSchemaCandidates(data.candidates || []);
+        shopify.toast.show("Blueprint generated successfully!");
+      } else {
+        shopify.toast.show(`Failed: ${data.error}`);
+      }
+    } catch (e: any) {
+      shopify.toast.show(`Error: ${e.message}`);
+    } finally {
+      setIsGeneratingSchema(false);
     }
   };
 
@@ -649,11 +691,13 @@ export default function Index() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: isEdit ? selectedProfileId : undefined,
+          action: isEdit ? "update" : "create",
+          id: selectedProfileId,
           name: profileNameInput.trim(),
           rootUrl: profileRootUrlInput.trim(),
           productPattern: profileProductPatternInput.trim(),
           categoryPattern: profileCategoryPatternInput.trim(),
+          extractionRules: schemaRules ? JSON.stringify(schemaRules) : undefined
         }),
       });
       const data = await res.json();
@@ -1297,6 +1341,7 @@ export default function Index() {
   const [reviewOverwriteVariants, setReviewOverwriteVariants] = useState(true);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [isAutoPublishing, setIsAutoPublishing] = useState(false);
+  const [manualPublishCount, setManualPublishCount] = useState(0);
   const [reviewTitle, setReviewTitle] = useState("");
   const [reviewDescription, setReviewDescription] = useState("");
   const [reviewSku, setReviewSku] = useState("");
@@ -1766,6 +1811,7 @@ export default function Index() {
       
       const data = await res.json();
       if (data.success) {
+        setManualPublishCount(prev => prev + 1);
         shopify.toast.show("Product published successfully as DRAFT!");
         setIsReviewOpen(false);
         if (selectedSourceId) {
@@ -2518,6 +2564,127 @@ export default function Index() {
                             marginBottom: detectedProductExample ? "4px" : "0"
                           }}
                         />
+                        {detectedProductExample && (
+                          <div style={{ fontSize: "11px", color: "#007a5c", marginTop: "4px" }}>
+                            <strong>Detected Example:</strong> {detectedProductExample}
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div style={{ borderTop: "1px solid #e1e3e5", margin: "10px 0" }}></div>
+                      
+                      {/* SCHEMA BUILDER UI */}
+                      <div>
+                        <h4 style={{ fontSize: "13px", fontWeight: 600, color: "#202223", margin: "0 0 8px 0" }}>Product Schema Blueprint</h4>
+                        <p style={{ fontSize: "12px", color: "#5c5f62", margin: "0 0 12px 0" }}>
+                          Provide a single product URL. The AI will extract the data and build deterministic CSS rules for this profile.
+                        </p>
+                        <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+                          <input
+                            type="url"
+                            placeholder="https://www.acme-electronics.com/products/sample"
+                            value={profileSampleUrl}
+                            onChange={(e) => setProfileSampleUrl(e.target.value)}
+                            style={{
+                              flex: 1,
+                              padding: "8px 12px",
+                              borderRadius: "4px",
+                              border: "1px solid #bbb",
+                              fontSize: "13px",
+                              boxSizing: "border-box",
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleGenerateSchema}
+                            disabled={isGeneratingSchema || !profileSampleUrl}
+                            style={{
+                              background: "linear-gradient(135deg, #008060 0%, #005e46 100%)",
+                              border: "none",
+                              borderRadius: "4px",
+                              padding: "0 16px",
+                              fontSize: "13px",
+                              fontWeight: 600,
+                              color: "white",
+                              cursor: (isGeneratingSchema || !profileSampleUrl) ? "not-allowed" : "pointer",
+                              opacity: (isGeneratingSchema || !profileSampleUrl) ? 0.7 : 1
+                            }}
+                          >
+                            {isGeneratingSchema ? "Analyzing..." : "Generate Schema"}
+                          </button>
+                        </div>
+
+                        {schemaRules && schemaProductResult && (
+                          <div style={{ background: "#f4f6f8", borderRadius: "8px", border: "1px solid #e1e3e5", overflow: "hidden" }}>
+                            <div style={{ padding: "12px", background: "#e1e3e5", borderBottom: "1px solid #c9cccf", fontSize: "12px", fontWeight: 600 }}>
+                              Schema Mapping Review
+                            </div>
+                            <div style={{ padding: "12px", maxHeight: "300px", overflowY: "auto" }}>
+                              <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                                <thead>
+                                  <tr style={{ textAlign: "left", color: "#5c5f62", borderBottom: "1px solid #e1e3e5" }}>
+                                    <th style={{ padding: "6px 0", width: "20%" }}>Field</th>
+                                    <th style={{ padding: "6px 0", width: "45%" }}>Extracted Value</th>
+                                    <th style={{ padding: "6px 0", width: "35%" }}>CSS Selector</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {Object.entries(schemaRules).map(([key, rule]: [string, any]) => (
+                                    <tr key={key} style={{ borderBottom: "1px solid #eaeaea" }}>
+                                      <td style={{ padding: "8px 0", fontWeight: 500 }}>{key}</td>
+                                      <td style={{ padding: "8px 8px 8px 0" }}>
+                                        <div style={{ 
+                                          maxHeight: "40px", 
+                                          overflow: "hidden", 
+                                          textOverflow: "ellipsis", 
+                                          display: "-webkit-box", 
+                                          WebkitLineClamp: 2, 
+                                          WebkitBoxOrient: "vertical",
+                                          color: "#202223"
+                                        }}>
+                                          {typeof schemaProductResult[key] === 'object' ? JSON.stringify(schemaProductResult[key]) : (schemaProductResult[key] || "—")}
+                                        </div>
+                                      </td>
+                                      <td style={{ padding: "8px 0" }}>
+                                        <select 
+                                          value={rule.selector || ""}
+                                          onChange={(e) => {
+                                            const newSel = e.target.value;
+                                            setSchemaRules((prev: any) => ({
+                                              ...prev,
+                                              [key]: { ...prev[key], selector: newSel }
+                                            }));
+                                          }}
+                                          style={{
+                                            width: "100%",
+                                            padding: "4px",
+                                            fontSize: "11px",
+                                            border: "1px solid #c9cccf",
+                                            borderRadius: "4px",
+                                            background: "white"
+                                          }}
+                                        >
+                                          <option value={rule.selector}>{rule.selector} (AI Detected)</option>
+                                          <optgroup label="Alternatives from Page">
+                                            {schemaCandidates.map((c, i) => (
+                                              <option key={i} value={c.selector}>
+                                                {c.selector} - "{c.text.substring(0, 30)}..."
+                                              </option>
+                                            ))}
+                                          </optgroup>
+                                        </select>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div style={{ padding: "10px 12px", fontSize: "11px", color: "#5c5f62", background: "#fff", borderTop: "1px solid #e1e3e5" }}>
+                              If a selector is incorrect, use the dropdown to choose an alternative text element from the page.
+                            </div>
+                          </div>
+                        )}
+
                         {detectedProductExample && (
                           <div style={{ fontSize: "11px", color: "#007a5c", marginTop: "4px" }}>
                             <strong>Detected Example:</strong> {detectedProductExample}
@@ -3902,23 +4069,30 @@ export default function Index() {
                 <div style={{ display: "flex", gap: "8px" }}>
                   <button 
                     type="button"
-                    onClick={() => setIsAutoPublishing(!isAutoPublishing)} 
-                    disabled={!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing}
+                    onClick={() => {
+                      if (manualPublishCount === 0) {
+                        alert("Please manually review and publish at least one product to verify data accuracy before enabling Auto-Publish.");
+                        return;
+                      }
+                      setIsAutoPublishing(!isAutoPublishing);
+                    }}
+                    title={manualPublishCount === 0 ? "You must manually publish at least one product first to verify data accuracy." : ""}
+                    disabled={manualPublishCount === 0 || (!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing)}
                     style={{
                       padding: "8px 16px",
                       fontSize: "13px",
                       fontWeight: 600,
                       borderRadius: "6px",
                       border: "none",
-                      background: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                      background: (manualPublishCount === 0 || (!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing))
                         ? "#e1e3e5"
                         : isAutoPublishing
                           ? "linear-gradient(135deg, #d32f2f 0%, #9a0007 100%)"
                           : "linear-gradient(135deg, #008060 0%, #005e46 100%)",
-                      color: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                      color: (manualPublishCount === 0 || (!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing))
                         ? "#8c9196"
                         : "white",
-                      cursor: !queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing
+                      cursor: (manualPublishCount === 0 || (!queuedSources.some(s => ["queued", "converting", "ready"].includes(s.status) && !s.name.startsWith("✓")) && !isAutoPublishing))
                         ? "not-allowed"
                         : "pointer",
                       boxShadow: "0 1px 3px rgba(0,0,0,0.1)"

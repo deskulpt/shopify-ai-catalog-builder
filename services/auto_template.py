@@ -61,15 +61,43 @@ def apply_extraction_rules(html_content: str, rules: dict) -> dict:
 def build_gemini_template_prompt(html_content: str) -> str:
     return f"""
     You are an expert web scraper. Given the following HTML of a product page, 
-    generate CSS selectors to extract the core product data.
+    extract the product data according to the Universal Product Schema below.
+    Also generate CSS selectors to extract this data deterministically.
     
     Output a JSON object with this exact structure:
     {{
       "product": {{
-         "title": "Extracted Title",
+         "title": "Extracted full product title",
+         "vendor": "Brand or manufacturer name",
+         "category": "Product category or breadcrumb",
+         "tags": ["tag1", "tag2"],
          "price": "10.00",
-         "description": "Extracted desc...",
-         "images": [{{"url": "img1.jpg"}}]
+         "compare_at_price": "15.00",
+         "sku": "Base SKU",
+         "description": "Main product description",
+         "description_sections": [
+           {{"title": "Ingredients", "content": "Water, Glycerin..."}}
+         ],
+         "metafields": {{
+           "Weight": "1.5 lbs",
+           "Material": "Ceramic"
+         }},
+         "options": [
+           {{"name": "Color", "values": ["Red", "Blue"]}},
+           {{"name": "Size", "values": ["S", "M", "L"]}}
+         ],
+         "variants": [
+           {{
+             "optionValues": [{{"optionName": "Color", "name": "Red"}}, {{"optionName": "Size", "name": "M"}}],
+             "sku": "VAR-RED-M",
+             "price": "10.00",
+             "available": true,
+             "image_url": "img_red.jpg"
+           }}
+         ],
+         "images": [
+           {{"url": "img1.jpg", "alt": "Front view"}}
+         ]
       }},
       "extraction_rules": {{
          "title": {{"selector": "h1.product-title", "attr": "text"}},
@@ -79,6 +107,8 @@ def build_gemini_template_prompt(html_content: str) -> str:
     }}
     
     Ensure the CSS selectors are specific enough to work reliably.
+    Extract as much valid product data as you can find. Look deeply into the HTML for variants, specifications, and images.
+    
     HTML Content:
     {html_content[:100000]} 
     """

@@ -492,7 +492,29 @@ def matches_category_segments(cat_url, prod_url):
 def preprocess_html_content(html_bytes):
     try:
         soup = BeautifulSoup(html_bytes, "html.parser")
-        modified = False
+        
+        # 1. Remove noisy structural tags
+        for tag_name in ['nav', 'header', 'footer', 'aside', 'script', 'style', 'noscript', 'iframe', 'canvas', 'svg']:
+            for node in soup.find_all(tag_name):
+                node.decompose()
+                
+        # 2. Remove elements with classes/ids often used for noise
+        noisy_patterns = ['menu', 'footer', 'nav', 'sidebar', 'cart', 'drawer', 'popup', 'modal', 'announcement', 'cookie', 'newsletter', 'subscribe', 'banner']
+        
+        for elem in soup.find_all(True):
+            if elem.get('class'):
+                class_str = ' '.join(elem.get('class')).lower()
+                if any(p in class_str for p in noisy_patterns):
+                    elem.decompose()
+                    continue
+            
+            if elem.get('id'):
+                id_str = str(elem.get('id')).lower()
+                if any(p in id_str for p in noisy_patterns):
+                    elem.decompose()
+                    continue
+
+        # 3. Process onclick pdf/link handling
         for tag in soup.find_all(attrs={"onclick": True}):
             onclick = tag["onclick"]
             match = re.search(r"window\.open\s*\(\s*['\"]([^'\"]+)['\"]", onclick)
@@ -506,10 +528,10 @@ def preprocess_html_content(html_bytes):
                         tag.clear()
                         tag.append(a_tag)
                         del tag["onclick"]
-                        modified = True
-        if modified:
-            return str(soup).encode('utf-8')
-    except Exception:
+        
+        return str(soup).encode('utf-8')
+    except Exception as e:
+        print(f"Error in preprocess_html_content: {e}")
         pass
     return html_bytes
 
@@ -2895,10 +2917,95 @@ def pdf_config():
         manager.save(config)
         return jsonify({
             'success': True,
-            'config': config.to_dict()
         })
 
     return jsonify({'error': 'Invalid method'}), 405
+
+
+def extract_html_candidates(html_bytes: bytes) -> list:
+    """Extracts prominent text elements and their selectors to serve as mapping candidates."""
+    try:
+        soup = BeautifulSoup(html_bytes, "html.parser")
+        candidates = []
+        # Target prominent text elements
+        target_tags = ['h1', 'h2', 'h3', 'h4', 'span', 'p', 'div', 'strong', 'b', 'li']
+        
+        for tag_name in target_tags:
+            for el in soup.find_all(tag_name):
+                text = el.get_text(strip=True)
+                if len(text) > 2 and len(text) < 150:
+                    # build a naive selector
+                    classes = el.get('class')
+                    sel = tag_name
+                    if classes:
+                        sel += "." + ".".join(classes)
+                    candidates.append({
+                        "selector": sel,
+                        "text": text,
+                        "tag": tag_name
+                    })
+        # Deduplicate by text
+        seen = set()
+        deduped = []
+        for c in candidates:
+            if c["text"] not in seen:
+                seen.add(c["text"])
+                deduped.append(c)
+        return deduped
+    except Exception as e:
+        logger.error(f"Candidate extraction failed: {e}")
+        return []
+
+@app.route('/generate-schema', methods=['POST'])
+def generate_schema():
+    """Generates a product extraction schema and CSS rules for a given profile URL"""
+    data = request.get_json() or {}
+    url = data.get('url', '')
+    
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
+        
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not gemini_key:
+        return jsonify({'error': 'No Gemini API key available'}), 500
+
+    try:
+        html_bytes = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+        cleaned_html = preprocess_html_content(html_bytes)
+        
+        candidates = extract_html_candidates(cleaned_html)
+        
+        from auto_template import build_gemini_template_prompt
+        prompt = build_gemini_template_prompt(cleaned_html.decode('utf-8', errors='ignore'))
+        
+        # Use existing Gemini extraction logic
+        result = extract_with_gemini(prompt)
+        
+        if result and "extraction_rules" in result:
+            prod = result.get("product", {})
+            title = prod.get("title", "").strip().lower()
+            
+            if not title or title in ["product", "item", "generic"]:
+                return jsonify({'error': 'Validation Error: AI extracted a generic or empty product title. Please provide a different sample URL or check the page structure.'}), 400
+                
+            variants = prod.get("variants", [])
+            if variants:
+                skus = [v.get("sku") for v in variants if v.get("sku")]
+                if len(skus) > 0 and len(skus) != len(set(skus)):
+                    return jsonify({'error': 'Validation Error: AI detected duplicate SKUs in product variants. Please try again or provide a better sample URL.'}), 400
+
+            return jsonify({
+                "success": True,
+                "product": prod,
+                "extraction_rules": result.get("extraction_rules", {}),
+                "candidates": candidates
+            })
+        else:
+            return jsonify({'error': 'Failed to generate schema'}), 500
+            
+    except Exception as e:
+        logger.error(f"Schema generation failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────
