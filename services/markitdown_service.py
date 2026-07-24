@@ -102,11 +102,31 @@ def convert_file():
             os.remove(tmp_path)
         return jsonify({'error': str(e)}), 500
 
-# Production Scraping Service - Fully Agnostic to Vendor / Industry
+def is_asset_or_image_url(url_str: str) -> bool:
+    if not url_str:
+        return True
+    u_lower = url_str.lower()
+    parsed = urllib.parse.urlparse(u_lower)
+    path = parsed.path
+    
+    # 1. Ignore image and media extensions in path or query
+    ignored_exts = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif', '.ico', '.pdf', '.zip', '.tar', '.gz', '.docx', '.xlsx', '.pptx', '.css', '.js', '.woff', '.ttf', '.eot', '.mp4', '.webm')
+    if any(path.endswith(ext) for ext in ignored_exts):
+        return True
+        
+    # 2. Ignore common static asset/CDN path segments
+    asset_segments = ('/wp-content/', '/wp-includes/', '/wp-json/', '/assets/', '/cdn-cgi/', '/static/', '/cdn/', '/media/catalog/', 'cdn.shopify.com')
+    if any(seg in u_lower for seg in asset_segments):
+        return True
+        
+    return False
 
 def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
     if all_candidate_urls is None:
         all_candidate_urls = []
+        
+    if is_asset_or_image_url(url):
+        return 'ignored'
         
     parsed = urllib.parse.urlparse(url)
     path = parsed.path.lower()
@@ -116,11 +136,6 @@ def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
     
     # 1. Ignore if external domain
     if parsed.netloc and parsed.netloc != domain and parsed.netloc.replace('www.', '') != domain.replace('www.', ''):
-        return 'ignored'
-        
-    # Ignore list of extensions
-    ignored_exts = ['.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.zip', '.tar', '.gz', '.pdf', '.docx', '.xlsx', '.pptx', '.css', '.js']
-    if any(path.endswith(ext) for ext in ignored_exts):
         return 'ignored'
 
     # Match custom overrides first if provided
@@ -527,7 +542,7 @@ def fetch_sitemap_urls_recursive(sitemap_url, visited=None, max_depth=3):
             else:
                 for loc in soup.find_all("loc"):
                     val = loc.text.strip()
-                    if val and not val.lower().endswith(ignored_exts) and "cdn.shopify.com" not in val.lower():
+                    if val and not is_asset_or_image_url(val):
                         extracted_urls.append(val)
     except Exception as e:
         print(f"Error fetching sitemap {sitemap_url}: {e}")
