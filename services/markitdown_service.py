@@ -259,10 +259,15 @@ def preprocess_html_content(html_bytes):
     try:
         soup = BeautifulSoup(html_bytes, "html.parser")
         
-        # 1. Remove noisy structural tags
-        for tag_name in ['nav', 'header', 'footer', 'aside', 'script', 'style', 'noscript', 'iframe', 'canvas', 'svg']:
+        # 1. Remove noisy structural tags (preserve JSON/JSON-LD script tags for structured data)
+        for tag_name in ['nav', 'header', 'footer', 'aside', 'style', 'noscript', 'iframe', 'canvas', 'svg']:
             for node in soup.find_all(tag_name):
                 node.decompose()
+
+        for tag in soup.find_all('script'):
+            stype = (tag.get('type') or '').lower()
+            if 'json' not in stype and 'ld+json' not in stype:
+                tag.decompose()
                 
         # 2. Remove elements with classes/ids often used for noise
         noisy_patterns = ['menu', 'footer', 'nav', 'sidebar', 'cart', 'drawer', 'popup', 'modal', 'announcement', 'cookie', 'newsletter', 'subscribe', 'banner']

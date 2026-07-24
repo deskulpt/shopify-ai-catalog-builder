@@ -60,10 +60,15 @@ def apply_extraction_rules(html_content: str, rules: dict) -> dict:
 
 def build_gemini_template_prompt(html_content: str) -> str:
     return f"""
-    You are an expert web scraper. Given the following HTML of a product page, 
-    extract the product data according to the Universal Product Schema below.
-    Also generate CSS selectors to extract this data deterministically.
-    
+    You are an expert e-commerce web scraper. Given the following HTML of a product page, 
+    thoroughly analyze and extract ALL product data according to the Universal Product Schema below.
+    Also generate robust CSS selectors to extract each field and attribute deterministically.
+
+    CRITICAL REQUIREMENTS:
+    1. EXPACT ALL SPECIFICATIONS & ATTRIBUTES: Look for specification tables, swatch lists, metadata key-value pairs (e.g. Hair Material, Texture, Style, Colors Shown, Available Colors, Lengths, Material, Weight, Dimensions, etc.) and put them into "metafields".
+    2. EXTRACT ALL OPTIONS & VARIANTS: Extract every product option (e.g. Color, Length, Size) into "options" AND every individual variant combination into "variants" (with price, sku, image_url, availability, optionValues).
+    3. GENERATE EXTRACTION RULES: Under "extraction_rules", provide CSS selectors for core fields AND for every custom specification key found under metafields!
+
     Output a JSON object with this exact structure:
     {{
       "product": {{
@@ -76,39 +81,50 @@ def build_gemini_template_prompt(html_content: str) -> str:
          "sku": "Base SKU",
          "description": "Main product description",
          "description_sections": [
-           {{"title": "Ingredients", "content": "Water, Glycerin..."}}
+           {{"title": "Overview", "content": "..."}}
          ],
          "metafields": {{
-           "Weight": "1.5 lbs",
-           "Material": "Ceramic"
+           "Hair Material": "UNPROCESSED HUMAN HAIR",
+           "Texture": "SILKY",
+           "Style": "CURLY",
+           "Color Shown": "Natural",
+           "Available Colors": "NATURAL, Natural Black",
+           "Lengths": "10\" 12\" 14\""
          }},
          "options": [
-           {{"name": "Color", "values": ["Red", "Blue"]}},
-           {{"name": "Size", "values": ["S", "M", "L"]}}
+           {{"name": "Color", "values": ["NATURAL", "Natural Black"]}},
+           {{"name": "Length", "values": ["10\"", "12\"", "14\""]}}
          ],
          "variants": [
            {{
-             "optionValues": [{{"optionName": "Color", "name": "Red"}}, {{"optionName": "Size", "name": "M"}}],
-             "sku": "VAR-RED-M",
-             "price": "10.00",
+             "optionValues": [{{"optionName": "Color", "name": "NATURAL"}}, {{"optionName": "Length", "name": "10\""}}],
+             "sku": "VAR-NAT-10",
+             "price": "29.99",
              "available": true,
-             "image_url": "img_red.jpg"
+             "image_url": "https://..."
            }}
          ],
          "images": [
-           {{"url": "img1.jpg", "alt": "Front view"}}
+           {{"url": "https://...", "alt": "Product view"}}
          ]
       }},
       "extraction_rules": {{
          "title": {{"selector": "h1.product-title", "attr": "text"}},
-         "price": {{"selector": ".price-item", "attr": "text"}},
-         "images": {{"selector": ".gallery img", "attr": "src", "multiple": true}}
+         "price": {{"selector": ".price", "attr": "text"}},
+         "description": {{"selector": ".description", "attr": "text"}},
+         "images": {{"selector": ".gallery img", "attr": "src", "multiple": true}},
+         "metafields": {{
+            "Hair Material": {{"selector": ".spec-hair-material", "attr": "text"}},
+            "Texture": {{"selector": ".spec-texture", "attr": "text"}},
+            "Style": {{"selector": ".spec-style", "attr": "text"}},
+            "Lengths": {{"selector": ".spec-lengths", "attr": "text"}}
+         }}
       }}
     }}
     
-    Ensure the CSS selectors are specific enough to work reliably.
-    Extract as much valid product data as you can find. Look deeply into the HTML for variants, specifications, and images.
+    Ensure CSS selectors are specific and reliable.
+    Look deeply into structured data tags, HTML text nodes, tables, and dropdowns for all variants and specifications.
     
     HTML Content:
-    {html_content[:100000]} 
+    {html_content[:120000]} 
     """

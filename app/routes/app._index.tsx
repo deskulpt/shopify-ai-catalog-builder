@@ -2573,53 +2573,114 @@ export default function Index() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {Object.entries(schemaRules).map(([key, rule]: [string, any]) => (
-                                    <tr key={key} style={{ borderBottom: "1px solid #eaeaea" }}>
-                                      <td style={{ padding: "8px 0", fontWeight: 500 }}>{key}</td>
-                                      <td style={{ padding: "8px 8px 8px 0" }}>
-                                        <div style={{ 
-                                          maxHeight: "40px", 
-                                          overflow: "hidden", 
-                                          textOverflow: "ellipsis", 
-                                          display: "-webkit-box", 
-                                          WebkitLineClamp: 2, 
-                                          WebkitBoxOrient: "vertical",
-                                          color: "#202223"
-                                        }}>
-                                          {typeof schemaProductResult[key] === 'object' ? JSON.stringify(schemaProductResult[key]) : (schemaProductResult[key] || "—")}
-                                        </div>
-                                      </td>
-                                      <td style={{ padding: "8px 0" }}>
-                                        <select 
-                                          value={rule.selector || ""}
-                                          onChange={(e) => {
-                                            const newSel = e.target.value;
-                                            setSchemaRules((prev: any) => ({
-                                              ...prev,
-                                              [key]: { ...prev[key], selector: newSel }
-                                            }));
-                                          }}
-                                          style={{
-                                            width: "100%",
-                                            padding: "4px",
+                                  {(() => {
+                                    const rows: Array<{ key: string; label: string; value: any; selector?: string }> = [];
+                                    
+                                    // 1. Core top-level fields
+                                    Object.entries(schemaRules).forEach(([k, r]: [string, any]) => {
+                                      if (k !== 'metafields' && typeof r === 'object' && r !== null && r.selector) {
+                                        rows.push({
+                                          key: k,
+                                          label: k,
+                                          value: schemaProductResult[k],
+                                          selector: r.selector
+                                        });
+                                      }
+                                    });
+
+                                    // 2. Custom Metafields & Specifications (e.g. Hair Material, Texture, Style, Lengths, Colors)
+                                    const metafieldsObj = schemaProductResult.metafields || {};
+                                    const metafieldsRules = (schemaRules.metafields || {}) as Record<string, any>;
+                                    Object.entries(metafieldsObj).forEach(([mk, mv]) => {
+                                      rows.push({
+                                        key: `metafield:${mk}`,
+                                        label: `Metafield: ${mk}`,
+                                        value: mv,
+                                        selector: metafieldsRules[mk]?.selector || ".product-details, table, .specs"
+                                      });
+                                    });
+
+                                    // 3. Product Swatch / Variant Options
+                                    if (Array.isArray(schemaProductResult.options) && schemaProductResult.options.length > 0) {
+                                      schemaProductResult.options.forEach((opt: any) => {
+                                        rows.push({
+                                          key: `option:${opt.name}`,
+                                          label: `Option: ${opt.name}`,
+                                          value: Array.isArray(opt.values) ? opt.values.join(", ") : String(opt.values),
+                                          selector: ".variant-option, select, .swatch"
+                                        });
+                                      });
+                                    }
+
+                                    // 4. Variants Count
+                                    if (Array.isArray(schemaProductResult.variants) && schemaProductResult.variants.length > 0) {
+                                      rows.push({
+                                        key: "variants_count",
+                                        label: "Variants",
+                                        value: `${schemaProductResult.variants.length} variant combinations extracted`,
+                                        selector: "script[type='application/ld+json'], .variant-selector"
+                                      });
+                                    }
+
+                                    return rows.map((row) => (
+                                      <tr key={row.key} style={{ borderBottom: "1px solid #eaeaea" }}>
+                                        <td style={{ padding: "8px 0", fontWeight: 600, color: row.key.startsWith('metafield:') ? '#005bd3' : (row.key.startsWith('option:') ? '#007a5c' : '#202223') }}>
+                                          {row.label}
+                                        </td>
+                                        <td style={{ padding: "8px 8px 8px 0" }}>
+                                          <div style={{ 
+                                            maxHeight: "50px", 
+                                            overflowY: "auto",
                                             fontSize: "11px",
-                                            border: "1px solid #c9cccf",
-                                            borderRadius: "4px",
-                                            background: "white"
-                                          }}
-                                        >
-                                          <option value={rule.selector}>{rule.selector} (AI Detected)</option>
-                                          <optgroup label="Alternatives from Page">
-                                            {schemaCandidates.map((c, i) => (
-                                              <option key={i} value={c.selector}>
-                                                {c.selector} - "{c.text.substring(0, 30)}..."
-                                              </option>
-                                            ))}
-                                          </optgroup>
-                                        </select>
-                                      </td>
-                                    </tr>
-                                  ))}
+                                            color: "#202223",
+                                            wordBreak: "break-word"
+                                          }}>
+                                            {typeof row.value === 'object' ? JSON.stringify(row.value) : (String(row.value || "—"))}
+                                          </div>
+                                        </td>
+                                        <td style={{ padding: "8px 0" }}>
+                                          <select 
+                                            value={row.selector || ""}
+                                            onChange={(e) => {
+                                              const newSel = e.target.value;
+                                              if (row.key.startsWith('metafield:')) {
+                                                const mk = row.key.replace('metafield:', '');
+                                                setSchemaRules((prev: any) => ({
+                                                  ...prev,
+                                                  metafields: {
+                                                    ...(prev.metafields || {}),
+                                                    [mk]: { selector: newSel }
+                                                  }
+                                                }));
+                                              } else {
+                                                setSchemaRules((prev: any) => ({
+                                                  ...prev,
+                                                  [row.key]: { ...(prev[row.key] || {}), selector: newSel }
+                                                }));
+                                              }
+                                            }}
+                                            style={{
+                                              width: "100%",
+                                              padding: "4px",
+                                              fontSize: "11px",
+                                              border: "1px solid #c9cccf",
+                                              borderRadius: "4px",
+                                              background: "white"
+                                            }}
+                                          >
+                                            <option value={row.selector}>{row.selector || "auto-detected"} (AI Detected)</option>
+                                            <optgroup label="Alternatives from Page">
+                                              {schemaCandidates.map((c, i) => (
+                                                <option key={i} value={c.selector}>
+                                                  {c.selector} - "{c.text.substring(0, 30)}..."
+                                                </option>
+                                              ))}
+                                            </optgroup>
+                                          </select>
+                                        </td>
+                                      </tr>
+                                    ));
+                                  })()}
                                 </tbody>
                               </table>
                             </div>
