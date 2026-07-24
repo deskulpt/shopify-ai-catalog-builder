@@ -4795,27 +4795,7 @@ export default function Index() {
         </div>
       )}
 
-      {/* Standard Specifications Footer */}
-      {activeTab !== "queue" && (
-        <s-section slot="aside" heading="System Specs & Resources">
-          <s-paragraph>
-            <s-text>Framework: </s-text>
-            <s-link href="https://reactrouter.com/" target="_blank">React Router v7</s-link>
-          </s-paragraph>
-          <s-paragraph>
-            <s-text>Interface: </s-text>
-            <s-link href="https://shopify.dev/docs/api/app-home/using-polaris-components" target="_blank">Polaris Web Components</s-link>
-          </s-paragraph>
-          <s-paragraph>
-            <s-text>Custom Data: </s-text>
-            <s-link href="https://shopify.dev/docs/apps/build/custom-data" target="_blank">Metafields &amp; Metaobjects</s-link>
-          </s-paragraph>
-          <s-paragraph>
-            <s-text>Python Service: </s-text>
-            <s-text>Port 5005 (MarkItDown + Flask)</s-text>
-          </s-paragraph>
-        </s-section>
-      )}
+
 
 
       {/* Review & Publish Drawer/Modal Overlay */}
