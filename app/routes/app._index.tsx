@@ -612,7 +612,7 @@ export default function Index() {
     setIsDetectingPatterns(true);
     shopify.toast.show("Detecting patterns from sitemap...");
     try {
-      const res = await fetch("http://localhost:5005/crawl", {
+      const res = await fetch("/api/crawl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: profileRootUrlInput }),
@@ -656,7 +656,7 @@ export default function Index() {
     setIsGeneratingSchema(true);
     shopify.toast.show("Analyzing page and building extraction blueprint...");
     try {
-      const res = await fetch("http://localhost:5005/generate-schema", {
+      const res = await fetch("/api/generate-schema", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: profileSampleUrl }),
