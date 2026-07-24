@@ -30,6 +30,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           extractionRules = JSON.parse(profile.extractionRules);
         } catch (e) {}
       }
+    } else if (domain || url) {
+      const targetSearch = domain || (url ? new URL(url).hostname : "");
+      if (targetSearch) {
+        const profile = await prisma.crawlProfile.findFirst({
+          where: {
+            OR: [
+              { rootUrl: { contains: targetSearch } },
+              { name: { contains: targetSearch } }
+            ]
+          }
+        });
+        if (profile && profile.extractionRules) {
+          try {
+            extractionRules = JSON.parse(profile.extractionRules);
+          } catch (e) {}
+        }
+      }
     }
 
     // Forward URL to Python extraction service

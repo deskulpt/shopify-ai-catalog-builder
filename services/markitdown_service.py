@@ -1868,7 +1868,7 @@ def extract_product():
     # Try deterministic fast path
     if extraction_rules and url:
         try:
-            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_raw = fetch_html_rendered_bytes(url)
             html_content = preprocess_html_content(html_raw)
             deterministic_product = apply_extraction_rules(html_content, extraction_rules)
             if deterministic_product and deterministic_product.get("title"):
@@ -1877,12 +1877,12 @@ def extract_product():
                     "product": deterministic_product
                 })
         except Exception as e:
-            logger.error(f"Deterministic extraction failed, falling back to AI: {e}")
+            print(f"Deterministic extraction failed, falling back to AI: {e}")
 
     # Fallback / Generation path
     if gemini_key and url:
         try:
-            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_raw = fetch_html_rendered_bytes(url)
             html_content = preprocess_html_content(html_raw)
             html_str = html_content.decode('utf-8', errors='ignore') if isinstance(html_content, bytes) else str(html_content)
             gemini_unified_prompt = build_gemini_template_prompt(html_str)
@@ -1896,7 +1896,7 @@ def extract_product():
                     "extraction_rules": result.get("extraction_rules")
                 })
         except Exception as e:
-            logger.error(f"Gemini rule generation failed: {e}")
+            print(f"Gemini rule generation failed: {e}")
 
     # Fallback to standard OpenAI if available
     if openai_key:
@@ -1915,10 +1915,10 @@ def extract_product():
         except Exception:
             pass
 
-    # Safety Net Fallback: Resilient HTML parser fallback using meta tags and BeautifulSoup
+    # Safety Net Fallback: Resilient HTML parser fallback using Playwright rendered DOM
     if url:
         try:
-            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_raw = fetch_html_rendered_bytes(url)
             html_content = preprocess_html_content(html_raw)
             fallback_prod = apply_extraction_rules(html_content, {})
             if fallback_prod and fallback_prod.get("title"):
@@ -1927,7 +1927,7 @@ def extract_product():
                     "product": fallback_prod
                 })
         except Exception as err:
-            logger.error(f"Safety net extraction failed: {err}")
+            print(f"Safety net extraction failed: {err}")
             
     # Parse and normalize results
     if result:
