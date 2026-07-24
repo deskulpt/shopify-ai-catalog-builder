@@ -268,7 +268,24 @@ def matches_category_segments(cat_url, prod_url):
     # Check if cat_segs is a prefix of prod_segs
     if len(cat_segs) > len(prod_segs):
         return False
-    return prod_segs[:len(cat_segs)] == cat_segs
+def fetch_html_rendered_bytes(url: str) -> bytes:
+    """Fetches HTML with Playwright headless browser rendering if available to capture client-side hydrated DOM, attributes, and variant images."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            page = context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(2000)
+            content = page.content()
+            browser.close()
+            if content and len(content) > 1000:
+                return content.encode("utf-8")
+    except Exception as e:
+        print(f"Playwright rendering fallback to http.get: {e}")
+        
+    return http.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=30).content
 
 def preprocess_html_content(html_bytes):
     try:
@@ -2753,7 +2770,7 @@ def generate_schema():
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 
     try:
-        html_bytes = http.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=30).content
+        html_bytes = fetch_html_rendered_bytes(url)
         cleaned_html = preprocess_html_content(html_bytes)
         candidates = extract_html_candidates(cleaned_html)
         

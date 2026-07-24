@@ -119,30 +119,36 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                 compare_at_price_val = c_match.group(0)
         product["compare_at_price"] = compare_at_price_val
 
-        # 4. Images Extraction with Fallbacks
+        # 4. Images Extraction (Unwrapping proxy URLs & capturing gallery + variant swatches)
+        import urllib.parse
         images = []
-        if "images" in rules and isinstance(rules["images"], dict):
-            rule = rules["images"]
-            sel = rule.get("selector", "")
-            if sel:
-                try:
-                    for el in soup.select(sel):
-                        src = el.get(rule.get("attr", "src"))
-                        if src:
-                            images.append({"url": src, "alt": el.get("alt", "")})
-                except Exception:
-                    pass
+        seen_img_urls = set()
+
+        def unwrap_img_url(u_str):
+            if not u_str:
+                return ""
+            if "_next/image?url=" in u_str or "url=" in u_str:
+                parsed = urllib.parse.urlparse(u_str)
+                qs = urllib.parse.parse_qs(parsed.query)
+                if "url" in qs and qs["url"][0]:
+                    return qs["url"][0]
+            return u_str
+
+        # Scan all images on page for gallery & swatches
+        for img in soup.find_all("img"):
+            raw_src = img.get("src") or img.get("data-src") or img.get("srcset")
+            if raw_src:
+                clean_src = unwrap_img_url(raw_src)
+                if any(ext in clean_src.lower() for ext in ['.png', '.jpg', '.jpeg', '.webp']) and not any(nobg in clean_src.lower() for nobg in ['logo', 'icon', 'spinner', 'facebook', 'twitter', 'instagram', 'youtube', 'tiktok', 'social']):
+                    if clean_src not in seen_img_urls:
+                        seen_img_urls.add(clean_src)
+                        images.append({"url": clean_src, "alt": img.get("alt", "")})
 
         if not images:
             og_img = soup.select_one("meta[property='og:image']")
             if og_img and og_img.get("content"):
-                images.append({"url": og_img.get("content"), "alt": product["title"]})
-
-        if not images:
-            for img in soup.select(".gallery img, .product-image img, main img")[:5]:
-                src = img.get("src") or img.get("data-src")
-                if src and not src.endswith('.svg') and 'logo' not in src.lower():
-                    images.append({"url": src, "alt": img.get("alt", "")})
+                c_og = unwrap_img_url(og_img.get("content"))
+                images.append({"url": c_og, "alt": product["title"]})
 
         product["images"] = images
 
@@ -170,13 +176,23 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                 except Exception:
                     pass
 
-        # Extract structured key-value pairs from tables, definition lists, and strong list items
-        for row in soup.select("table tr, dl, ul.product-attributes, .specs-list, .product-details li, .ingredients-list"):
+        # Extract structured key-value pairs from tables, definition lists, Tailwind grids, and list items
+        for row in soup.select("table tr, dl, ul.product-attributes, .specs-list, .product-details li, .ingredients-list, div[class*='grid'], div[class*='flex'], div[class*='spec']"):
+            # Check grid/flex sibling pairs
+            direct_divs = [c for c in row.find_all("div", recursive=False) if c.get_text(strip=True)]
+            if len(direct_divs) >= 2:
+                for i in range(len(direct_divs) - 1):
+                    lbl = direct_divs[i].get_text(strip=True).rstrip(":")
+                    val = direct_divs[i+1].get_text(strip=True)
+                    if 3 <= len(lbl) <= 35 and len(val) > 0 and lbl.lower() not in ('price', 'title', 'sku', 'description', 'view more', 'find a store'):
+                        if lbl.isupper() or any(attr_k in lbl.upper() for attr_k in ['HAIR', 'MATERIAL', 'TEXTURE', 'STYLE', 'COLOR', 'LENGTH', 'LACE', 'INGREDIENT']):
+                            metafields[lbl] = val
+
             cells = row.select("td, th, dt, dd, strong, b, span")
             if len(cells) >= 2:
                 k = cells[0].get_text(strip=True).rstrip(":")
                 v = cells[1].get_text(strip=True)
-                if k and v and 3 <= len(k) <= 40 and k.lower() not in ('price', 'title', 'sku', 'description'):
+                if k and v and 3 <= len(k) <= 40 and k.lower() not in ('price', 'title', 'sku', 'description', 'view more', 'find a store'):
                     metafields[k] = v
             elif row.name == 'li' and (':' in row.get_text() or '-' in row.get_text()):
                 txt = row.get_text(strip=True)
