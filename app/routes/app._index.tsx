@@ -2123,7 +2123,24 @@ export default function Index() {
   };
 
   return (
-    <s-page heading="Product Ingest AI" full-width>
+    <s-page heading="Product Ingest AI" full-width style={{ width: "100%", maxWidth: "100%" }}>
+      <style>{`
+        :root {
+          --pc-page-max-width: 100% !important;
+        }
+        .Polaris-Page, 
+        [class*="Polaris-Page"], 
+        s-page, 
+        [full-width] {
+          max-width: 100% !important;
+          width: 100% !important;
+        }
+        .Polaris-Page__Content {
+          max-width: 100% !important;
+          padding-left: 24px !important;
+          padding-right: 24px !important;
+        }
+      `}</style>
       <s-button 
         slot="primary-action" 
         onClick={handleExportQueue}
@@ -4029,7 +4046,7 @@ export default function Index() {
 
           <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", alignItems: "stretch", width: "100%" }}>
           {/* Left Column: Queue Dashboard & Table */}
-          <div style={{ flex: "1.2", minWidth: "450px" }}>
+          <div style={{ flex: "1 1 48%", minWidth: "500px" }}>
             <s-section heading="🗂 Queue & Auto-Publish dashboard">
               <div style={{
                 background: "#f0f4f9",
@@ -4307,7 +4324,7 @@ export default function Index() {
           </div>
 
           {/* Right Column: Source Preview Section */}
-          <div style={{ flex: "1", minWidth: "380px" }}>
+          <div style={{ flex: "1 1 48%", minWidth: "500px" }}>
             <s-section heading={`📝 Preview: ${selectedSource ? selectedSource.name.replace(/^✓ /, "") : "Select a Source"}`}>
               <div style={{ padding: "4px" }}>
                 {selectedSource ? (

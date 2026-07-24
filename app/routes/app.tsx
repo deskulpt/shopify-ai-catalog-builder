@@ -21,6 +21,28 @@ export default function App() {
   return (
     <PolarisAppProvider i18n={polarisTranslations}>
       <AppProvider embedded apiKey={apiKey}>
+        <style>{`
+          :root {
+            --pc-page-max-width: 100% !important;
+          }
+          body, html, main, #app, [data-polaris-layer] {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+          .Polaris-Page, 
+          [class*="Polaris-Page"], 
+          s-page, 
+          [full-width],
+          .Polaris-Box {
+            max-width: 100% !important;
+            width: 100% !important;
+          }
+          .Polaris-Page__Content {
+            max-width: 100% !important;
+            padding-left: 20px !important;
+            padding-right: 20px !important;
+          }
+        `}</style>
         <s-app-nav>
           <s-link href="/app">Catalog Ingest</s-link>
           <s-link href="/app/settings">Settings</s-link>
