@@ -304,6 +304,7 @@ def preprocess_html_content(html_bytes):
                 
         # 2. Remove elements with classes/ids often used for noise
         noisy_patterns = ['menu', 'footer', 'nav', 'sidebar', 'cart', 'drawer', 'popup', 'modal', 'announcement', 'cookie', 'newsletter', 'subscribe', 'banner']
+        keep_protected = ['tab', 'product-tab', 'spec', 'details', 'accordion']
         
         for elem in list(soup.find_all(True)):
             try:
@@ -313,14 +314,16 @@ def preprocess_html_content(html_bytes):
                 if classes:
                     class_str = ' '.join(classes) if isinstance(classes, list) else str(classes)
                     if any(p in class_str.lower() for p in noisy_patterns):
-                        elem.decompose()
-                        continue
+                        if not any(k in class_str.lower() for k in keep_protected):
+                            elem.decompose()
+                            continue
             
                 elem_id = elem.get('id') if hasattr(elem, 'get') else None
                 if elem_id:
                     if any(p in str(elem_id).lower() for p in noisy_patterns):
-                        elem.decompose()
-                        continue
+                        if not any(k in str(elem_id).lower() for k in keep_protected):
+                            elem.decompose()
+                            continue
             except Exception:
                 pass
 
@@ -1466,6 +1469,8 @@ def enrich_product_with_pdf_links(prod, url=None, domain=None):
         prod["short_description"] = (prod.get("short_description", "") + "\n" + "\n".join(pdf_texts)).strip()
 
 def detect_and_split_multi_products(markdown, url=None, domain=None):
+    if not markdown:
+        return None
     lines = markdown.split('\n')
     sections = []
     current_section = None
@@ -2811,6 +2816,25 @@ def generate_schema():
                         "images": {"selector": "meta[property='og:image'], .gallery img", "attr": "src"},
                         "metafields": {k: {"selector": "table, dl, .specs, [role='tabpanel']", "attr": "text"} for k in prod.get("metafields", {})}
                     }
+
+                # Always enrich product & rules with tab & accordion metafields
+                try:
+                    from auto_template import extract_tabs_and_accordions
+                    soup_elem = BeautifulSoup(cleaned_html, "html.parser")
+                    tabs_found = extract_tabs_and_accordions(soup_elem)
+                    meta_dict = prod.get("metafields", {})
+                    for tk, tv in tabs_found.items():
+                        if tk not in meta_dict:
+                            meta_dict[tk] = tv
+                    prod["metafields"] = meta_dict
+
+                    if "metafields" not in rules or not isinstance(rules.get("metafields"), dict):
+                        rules["metafields"] = {}
+                    for tk in tabs_found:
+                        if tk not in rules["metafields"]:
+                            rules["metafields"][tk] = {"selector": "[role='tabpanel'], .product-tabs__pane, details", "attr": "text"}
+                except Exception as tab_err:
+                    print(f"Tab enrichment error: {tab_err}")
 
                 if not merged_product:
                     merged_product = prod
