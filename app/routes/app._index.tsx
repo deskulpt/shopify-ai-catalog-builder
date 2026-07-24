@@ -434,6 +434,7 @@ export default function Index() {
   const [schemaCandidates, setSchemaCandidates] = useState<any[]>([]);
   const [schemaProductResult, setSchemaProductResult] = useState<any>(null);
   const [schemaRules, setSchemaRules] = useState<any>(null);
+  const [ignoredSchemaKeys, setIgnoredSchemaKeys] = useState<Record<string, boolean>>({});
 
   const [crawlUrlInput, setCrawlUrlInput] = useState("");
   const [customProductPattern, setCustomProductPattern] = useState("");
@@ -2603,8 +2604,9 @@ export default function Index() {
                                 <thead>
                                   <tr style={{ textAlign: "left", color: "#5c5f62", borderBottom: "1px solid #e1e3e5" }}>
                                     <th style={{ padding: "6px 0", width: "20%" }}>Field</th>
-                                    <th style={{ padding: "6px 0", width: "45%" }}>Extracted Value</th>
-                                    <th style={{ padding: "6px 0", width: "35%" }}>CSS Selector</th>
+                                    <th style={{ padding: "6px 0", width: "40%" }}>Extracted Value</th>
+                                    <th style={{ padding: "6px 0", width: "28%" }}>CSS Selector</th>
+                                    <th style={{ padding: "6px 0", width: "12%", textAlign: "center" }}>Action</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -2675,64 +2677,127 @@ export default function Index() {
                                       });
                                     }
 
-                                    return rows.map((row) => (
-                                      <tr key={row.key} style={{ borderBottom: "1px solid #eaeaea" }}>
-                                        <td style={{ padding: "8px 0", fontWeight: 600, color: row.key.startsWith('metafield:') ? '#005bd3' : (row.key.startsWith('option:') ? '#007a5c' : '#202223') }}>
-                                          {row.label}
-                                        </td>
-                                        <td style={{ padding: "8px 8px 8px 0" }}>
-                                          <div style={{ 
-                                            maxHeight: "50px", 
-                                            overflowY: "auto",
-                                            fontSize: "11px",
-                                            color: "#202223",
-                                            wordBreak: "break-word"
+                                    return rows.map((row) => {
+                                      const isIgnored = !!ignoredSchemaKeys[row.key];
+                                      return (
+                                        <tr 
+                                          key={row.key} 
+                                          style={{ 
+                                            borderBottom: "1px solid #eaeaea",
+                                            opacity: isIgnored ? 0.45 : 1,
+                                            backgroundColor: isIgnored ? "#f9fafb" : "transparent"
+                                          }}
+                                        >
+                                          <td style={{ 
+                                            padding: "8px 0", 
+                                            fontWeight: 600, 
+                                            textDecoration: isIgnored ? "line-through" : "none",
+                                            color: isIgnored ? '#8c9196' : (row.key.startsWith('metafield:') ? '#005bd3' : (row.key.startsWith('option:') ? '#007a5c' : '#202223')) 
                                           }}>
-                                            {typeof row.value === 'object' ? JSON.stringify(row.value) : (String(row.value || "—"))}
-                                          </div>
-                                        </td>
-                                        <td style={{ padding: "8px 0" }}>
-                                          <select 
-                                            value={row.selector || ""}
-                                            onChange={(e) => {
-                                              const newSel = e.target.value;
-                                              if (row.key.startsWith('metafield:')) {
-                                                const mk = row.key.replace('metafield:', '');
-                                                setSchemaRules((prev: any) => ({
-                                                  ...prev,
-                                                  metafields: {
-                                                    ...(prev.metafields || {}),
-                                                    [mk]: { selector: newSel }
-                                                  }
-                                                }));
-                                              } else {
-                                                setSchemaRules((prev: any) => ({
-                                                  ...prev,
-                                                  [row.key]: { ...(prev[row.key] || {}), selector: newSel }
-                                                }));
-                                              }
-                                            }}
-                                            style={{
-                                              width: "100%",
-                                              padding: "4px",
+                                            {row.label} {isIgnored && <span style={{ fontSize: "10px", color: "#d32f2f", fontStyle: "italic", marginLeft: "4px" }}>(Excluded)</span>}
+                                          </td>
+                                          <td style={{ padding: "8px 8px 8px 0" }}>
+                                            <div style={{ 
+                                              maxHeight: "50px", 
+                                              overflowY: "auto",
                                               fontSize: "11px",
-                                              border: "1px solid #c9cccf",
-                                              borderRadius: "4px",
-                                              background: "white"
-                                            }}
-                                          >
-                                            <option value={row.selector}>{row.selector || "auto-detected"} (AI Detected)</option>
-                                            <optgroup label="Alternatives from Page">
-                                              {schemaCandidates.map((c, i) => (
-                                                <option key={i} value={c.selector}>
-                                                  {c.selector} - "{c.text.substring(0, 30)}..."
-                                                </option>
-                                              ))}
-                                            </optgroup>
-                                          </select>
-                                        </td>
-                                      </tr>
-                                    ));
+                                              color: isIgnored ? "#8c9196" : "#202223",
+                                              wordBreak: "break-word",
+                                              textDecoration: isIgnored ? "line-through" : "none"
+                                            }}>
+                                              {typeof row.value === 'object' ? JSON.stringify(row.value) : (String(row.value || "—"))}
+                                            </div>
+                                          </td>
+                                          <td style={{ padding: "8px 4px 8px 0" }}>
+                                            <select 
+                                              disabled={isIgnored}
+                                              value={row.selector || ""}
+                                              onChange={(e) => {
+                                                const newSel = e.target.value;
+                                                if (row.key.startsWith('metafield:')) {
+                                                  const mk = row.key.replace('metafield:', '');
+                                                  setSchemaRules((prev: any) => ({
+                                                    ...prev,
+                                                    metafields: {
+                                                      ...(prev.metafields || {}),
+                                                      [mk]: { selector: newSel }
+                                                    }
+                                                  }));
+                                                } else {
+                                                  setSchemaRules((prev: any) => ({
+                                                    ...prev,
+                                                    [row.key]: { ...(prev[row.key] || {}), selector: newSel }
+                                                  }));
+                                                }
+                                              }}
+                                              style={{
+                                                width: "100%",
+                                                padding: "4px",
+                                                fontSize: "11px",
+                                                border: "1px solid #c9cccf",
+                                                borderRadius: "4px",
+                                                background: isIgnored ? "#f1f2f4" : "white",
+                                                color: isIgnored ? "#8c9196" : "#202223"
+                                              }}
+                                            >
+                                              <option value={row.selector}>{row.selector || "auto-detected"} (AI Detected)</option>
+                                              <optgroup label="Alternatives from Page">
+                                                {schemaCandidates.map((c, i) => (
+                                                  <option key={i} value={c.selector}>
+                                                    {c.selector} - "{c.text.substring(0, 30)}..."
+                                                  </option>
+                                                ))}
+                                              </optgroup>
+                                            </select>
+                                          </td>
+                                          <td style={{ padding: "8px 0", textAlign: "center" }}>
+                                            <button
+                                              type="button"
+                                              title={isIgnored ? "Click to restore field" : "Click to ignore / exclude this field from import"}
+                                              onClick={() => {
+                                                const nextIgnored = !isIgnored;
+                                                setIgnoredSchemaKeys(prev => ({ ...prev, [row.key]: nextIgnored }));
+                                                
+                                                if (row.key.startsWith('metafield:')) {
+                                                  const mk = row.key.replace('metafield:', '');
+                                                  setSchemaRules((prev: any) => ({
+                                                    ...prev,
+                                                    metafields: {
+                                                      ...(prev?.metafields || {}),
+                                                      [mk]: nextIgnored ? { selector: "skip", ignore: true } : { selector: ".product-details, table, .specs" }
+                                                    }
+                                                  }));
+                                                  setMetafieldMappings((prev: any) => ({
+                                                    ...prev,
+                                                    [mk]: nextIgnored ? "skip" : (prev[mk] || "auto")
+                                                  }));
+                                                } else {
+                                                  setSchemaRules((prev: any) => ({
+                                                    ...prev,
+                                                    [row.key]: nextIgnored ? { selector: "skip", ignore: true } : { selector: row.selector || "auto" }
+                                                  }));
+                                                }
+                                              }}
+                                              style={{
+                                                border: "1px solid " + (isIgnored ? "#c9cccf" : "#ffcdd2"),
+                                                background: isIgnored ? "#f3f3f3" : "#ffebee",
+                                                color: isIgnored ? "#5c5f62" : "#c62828",
+                                                cursor: "pointer",
+                                                borderRadius: "4px",
+                                                padding: "4px 8px",
+                                                fontSize: "11px",
+                                                fontWeight: 600,
+                                                display: "inline-flex",
+                                                alignItems: "center",
+                                                gap: "4px"
+                                              }}
+                                            >
+                                              {isIgnored ? "❌ Ignored" : "✕ Ignore"}
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    });
                                   })()}
                                 </tbody>
                               </table>
