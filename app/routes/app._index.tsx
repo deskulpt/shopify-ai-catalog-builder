@@ -618,29 +618,44 @@ export default function Index() {
         body: JSON.stringify({ url: profileRootUrlInput }),
       });
       const data = await res.json();
-      if (data.category_urls && data.category_urls.length > 0) {
-        const catUrl = new URL(data.category_urls[0]);
-        let path = catUrl.pathname;
-        if (path.includes("/collections/")) {
-           setProfileCategoryPatternInput("/collections/");
-        } else {
-           const parts = path.split('/').filter(Boolean);
-           if (parts.length > 0) setProfileCategoryPatternInput("/" + parts[0] + "/");
-        }
-        setDetectedCategoryExample(data.category_urls[0]);
+      const categoryUrls: string[] = (data.categories || []).map((c: any) => c.url).filter(Boolean);
+      const productUrls: string[] = (data.categories || []).flatMap((c: any) => (c.products || []).map((p: any) => p.url)).filter(Boolean);
+
+      if (categoryUrls.length > 0) {
+        const randomIndex = Math.floor(Math.random() * Math.min(categoryUrls.length, 5));
+        const sampleCatUrlStr = categoryUrls[randomIndex] || categoryUrls[0];
+        try {
+          const catUrl = new URL(sampleCatUrlStr);
+          let path = catUrl.pathname;
+          if (path.includes("/collections/")) {
+             setProfileCategoryPatternInput("/collections/");
+          } else {
+             const parts = path.split('/').filter(Boolean);
+             if (parts.length > 0) setProfileCategoryPatternInput("/" + parts[0] + "/");
+          }
+          setDetectedCategoryExample(sampleCatUrlStr);
+        } catch (_) {}
       }
-      if (data.product_urls && data.product_urls.length > 0) {
-        const prodUrl = new URL(data.product_urls[0]);
-        let path = prodUrl.pathname;
-        if (path.includes("/products/")) {
-           setProfileProductPatternInput("/products/");
-        } else {
-           const parts = path.split('/').filter(Boolean);
-           if (parts.length > 0) setProfileProductPatternInput("/" + parts[0] + "/");
-        }
-        setDetectedProductExample(data.product_urls[0]);
+
+      if (productUrls.length > 0) {
+        const randomIndex = Math.floor(Math.random() * Math.min(productUrls.length, 10));
+        const sampleProdUrlStr = productUrls[randomIndex] || productUrls[0];
+        try {
+          const prodUrl = new URL(sampleProdUrlStr);
+          let path = prodUrl.pathname;
+          if (path.includes("/products/")) {
+             setProfileProductPatternInput("/products/");
+          } else {
+             const parts = path.split('/').filter(Boolean);
+             if (parts.length > 0) setProfileProductPatternInput("/" + parts[0] + "/");
+          }
+          setDetectedProductExample(sampleProdUrlStr);
+          // Auto-fill Sample Product URL for blueprint schema generator
+          setProfileSampleUrl(sampleProdUrlStr);
+        } catch (_) {}
       }
-      shopify.toast.show("Pattern detection complete");
+
+      shopify.toast.show("Pattern detection complete & sample URL populated!");
     } catch (e: any) {
       shopify.toast.show(`Auto-detect failed: ${e.message}`);
     } finally {
