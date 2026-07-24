@@ -102,237 +102,7 @@ def convert_file():
             os.remove(tmp_path)
         return jsonify({'error': str(e)}), 500
 
-MOCK_PRODUCTS_MARKDOWN = {
-    "centrifugal-5hp": """# Centrifugal Pump 5HP (Direct Buy)
-SKU: CP-5HP-100
-Price: $599.00
-This is a high-quality centrifugal pump designed for industrial water transport and booster applications.
-
-Specifications:
-- Diameter: φ3
-- Mounting: flush
-- Operating distance/Sn: 0.6mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 Wire
-- Model: CP-5HP-100
-- Connection type: axial cable exit
-""",
-    "slurry-10hp": """# Heavy Duty Slurry Pump 10HP (Quote Only)
-SKU: SP-10HP-900
-Price: Request a quote
-
-Designed for handling abrasive slurries and high-density solids in mining and heavy chemical processing.
-
-Specifications:
-- Diameter: φ4
-- Mounting: flush
-- Operating distance/Sn: 0.8mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 Wire
-- Model: SP-10HP-900
-- Connection type: prewired M8 connector
-""",
-    "submersible-2hp": """# Submersible Effluent Pump 2HP
-SKU: SUB-2HP-200
-Price: $349.00
-
-Suitable for commercial and residential wastewater, effluent transfer, and dewatering applications.
-
-Specifications:
-- Diameter: M4
-- Mounting: flush
-- Operating distance/Sn: 0.6mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 Wire
-- Model: SUB-2HP-200
-- Connection type: axial cable exit
-""",
-    "diaphragm-high": """# High-Pressure Diaphragm Pump (Quote Only)
-SKU: DP-HP-300
-Price: Contact us for pricing
-
-Positive displacement diaphragm pump for high-pressure chemical metering and fluid injection systems.
-
-Specifications:
-- Diameter: φ4
-- Mounting: flush
-- Operating distance/Sn: 1.5mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 Wire
-- Model: DP-HP-300
-- Connection type: prewired M8 connector
-""",
-    "three-phase-15hp": """# Three-Phase AC Induction Motor 15HP (Quote Only)
-SKU: MOT-3P-15HP
-Price: Price on request
-
-Heavy-duty three-phase induction motor for industrial conveyors, fans, and machinery drives.
-
-Specifications:
-- Diameter: M5
-- Mounting: flush
-- Operating distance/Sn: 0.8mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: MOT-3P-15HP
-- Connection type: M8 connector
-""",
-    "single-phase-1hp": """# Single-Phase General Purpose Motor 1HP
-SKU: MOT-1P-1HP
-Price: $189.00
-
-General purpose single-phase electric motor for workshop tools, pumps, and light duty drives.
-
-Specifications:
-- Diameter: M5
-- Mounting: flush
-- Operating distance/Sn: 1.5mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: MOT-1P-1HP
-- Connection type: prewired M8 connector
-""",
-    "explosion-proof-20hp": """# Explosion Proof Motor 20HP (Quote Only)
-SKU: MOT-XP-20HP
-Price: Call for price
-
-ATEX certified explosion-proof electric motor for hazardous environments including oil, gas, and dust.
-
-Specifications:
-- Diameter: M5
-- Mounting: flush
-- Operating distance/Sn: 1mm
-- Housing material: stainless steel
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: MOT-XP-20HP
-- Connection type: axial cable exit
-""",
-    "ball-valve-half": """# High-Pressure Brass Ball Valve 1/2"
-SKU: VLV-BB-050
-Price: $24.95
-
-Premium forged brass ball valve for high-pressure water, gas, and oil flow control.
-
-Specifications:
-- Diameter: Q5
-- Mounting: flush
-- Operating distance/Sn: 0.8mm
-- Housing material: nickel plated brass
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: VLV-BB-050
-- Connection type: axial cable exit
-""",
-    "pneumatic-2in": """# Pneumatic Flow Control Valve 2" (Quote Only)
-SKU: VLV-PF-200
-Price: Contact for quote
-
-Double acting pneumatic flow control valve for automated industrial process pipelines.
-
-Specifications:
-- Diameter: Q5
-- Mounting: flush
-- Operating distance/Sn: 1.5mm
-- Housing material: nickel plated brass
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: VLV-PF-200
-- Connection type: prewired M8 connector
-""",
-    "solenoid-24v": """# Solenoid Water Valve 24V
-SKU: VLV-SOL-24V
-Price: $45.00
-
-Normally closed direct-acting solenoid water valve, 24V DC.
-
-Specifications:
-- Diameter: Q5
-- Mounting: flush
-- Operating distance/Sn: 1.5mm
-- Housing material: nickel plated brass
-- Operating voltage: 10-30VDC
-- Output: DC 3 wire
-- Model: VLV-SOL-24V
-- Connection type: prewired M8 connector
-""",
-    "product-14047-1024693": """# BD Sensors XMP i Precision Pressure Transmitter
-SKU: XMP-I-1024693
-Price: Request a quote
-
-The XMP i precision process pressure transmitter is designed for industrial process engineering, chemical and petrochemical industries, and sanitary/food/pharmaceutical applications. Equipped with HART-communication as standard, it measures gauge, absolute, and vacuum pressure.
-
-Specifications:
-- Pressure range: 0-400 mbar to 0-600 bar
-- Accuracy: 0.1% FSO
-- Turn-down: 1:10
-- Operating voltage: 12-36VDC
-- Housing material: stainless steel
-- Output signal: 4-20mA with HART
-- Ingress protection: IP67
-- Mounting: flush diaphragm
-- Explosion protection: Intrinsically safe (ATEX)
-- Medium temperature: -40 to 125 °C (up to 300 °C with cooling element)
-- Connection: G1/2" thread
-
-Documents:
-- [Product Brochure (HTML Viewer)](https://pdf.directindustry.com/pdf/bd-sensors/xmp-i-precision-pressure-transmitter/14047-920409.html)
-""",
-    "product-14047-1024694": """# Industrial Pressure Transmitter DMP 331
-SKU: DMP-331-1024694
-Price: $189.00
-
-Standard industrial pressure transmitter for fluids and gases.
-
-Specifications:
-- Pressure range: 0-100 mbar to 0-40 bar
-- Accuracy: 0.5% FSO
-- Operating voltage: 8-32VDC
-- Housing material: stainless steel
-- Output signal: 4-20mA
-- Ingress protection: IP65
-""",
-    "product-14047-1024695": """# Submersible Level Probe LMK 351
-SKU: LMK-351-1024695
-Price: Request a quote
-
-Submersible level probe for wastewater and sewage.
-
-Specifications:
-- Level range: 0-1 mH2O to 0-100 mH2O
-- Accuracy: 0.5% FSO
-- Housing material: stainless steel / ceramic
-- Output signal: 4-20mA
-- Ingress protection: IP68
-""",
-    "2852615731791": """### 16A Pull Cord Switch
-SKU: PCS-16A-IM
-Price: ₹ 1,500 / Piece Get Latest Price
-
-Designed for heavy-duty industrial conveyor safety belt application. Features robust metal enclosure and IP67 ingress protection.
-
-Specifications:
-- Contact Rating: 16A at 240VAC
-- Enclosure Material: Cast Aluminum
-- Ingress Protection: IP67
-- Reset Type: Manual Reset
-- Operating Angle: 20 degrees
-- Mounting: Base Mounting
-- Cable Entry: 2 x M20
-
-Images:
-![Pull Cord Switch front view](https://5.imimg.com/data5/SELLER/Default/2026/5/610650033/VC/RI/EH/2744130/pull-cord-wire-rope-500x500.jpg)
-
-Downloads:
-- [Technical Datasheet](https://pdf.indiamart.com/impdf/11570431588/2744130/16a-pull-cord-switch.pdf)
-"""
-}
+# Production Scraping Service - Fully Agnostic to Vendor / Industry
 
 def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
     if all_candidate_urls is None:
@@ -443,21 +213,17 @@ def classify_url(url, text, domain, all_candidate_urls=None, patterns=None):
     if has_num_suffix:
         return 'product'
         
-    # 8. Check if plural page name (category) vs singular/spec-heavy (product)
+    # 8. Check if plural page name (category) vs singular (product)
     if path.endswith('.html') or path.endswith('.php'):
         is_plural = page_name_no_ext.endswith('s') or page_name_no_ext.endswith('es')
-        contains_product_spec = any(k in text_lower for k in ['1hp', '5hp', '10hp', '1/2', '24v', '12v', '110v', '220v', 'mm', 'cm', 'kg', 'amp', 'volt'])
-        if is_plural and not contains_product_spec:
+        if is_plural:
             return 'category'
         else:
-            if any(k in text_lower for k in ['sensor', 'switch', 'pump', 'valve', 'motor', 'control', 'cable', 'connector', 'industrial', 'automation', 'module', 'relay', 'breaker', 'plug', 'indicator', 'transmitter']):
-                return 'product'
-            return 'category'
-            
-    # 9. Fallback based on text content
-    if len(path.split('/')) > 1:
-        if any(k in text_lower for k in ['sensor', 'switch', 'pump', 'valve', 'motor', 'control', 'cable', 'connector', 'industrial', 'automation', 'module', 'relay', 'breaker', 'plug', 'indicator', 'transmitter']):
             return 'product'
+            
+    # 9. Generic fallback based on path depth
+    if len([p for p in path.split('/') if p]) > 2:
+        return 'product'
             
     return 'unknown'
 
@@ -636,11 +402,7 @@ def convert_url():
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
         
-    # Intercept mock URL paths
-    for key, mock_md in MOCK_PRODUCTS_MARKDOWN.items():
-        if key in url.lower():
-            if "mock" in url.lower() or "example" in url.lower() or "defurotech" in url.lower() or "directindustry" in url.lower() or "indiamart" in url.lower():
-                return jsonify({'success': True, 'markdown': mock_md})
+
     
     try:
         # Parse URL to check for fragment
@@ -714,80 +476,47 @@ def convert_url():
             os.remove(tmp_path)
         return jsonify({'error': str(e)}), 500
 
-def get_mock_taxonomy(domain):
-    if "directindustry" in domain.lower() or "bd-sensors" in domain.lower():
-        return {
-            "success": True,
-            "domain": domain,
-            "robots": {
-                "sitemaps": [f"https://{domain}/sitemap.xml"],
-                "crawl_delay": 1
-            },
-            "llms_txt": "# BD Sensors Catalog on DirectIndustry\n\nWe offer high precision pressure transmitters and level probes.",
-            "categories": [
-                {
-                    "name": "Pressure Transmitters",
-                    "url": f"https://{domain}/prod/bd-sensors-gmbh/pressure-transmitters",
-                    "product_count": 2,
-                    "products": [
-                        { "name": "BD Sensors XMP i Precision Pressure Transmitter", "url": f"https://{domain}/prod/bd-sensors-gmbh/product-14047-1024693.html" },
-                        { "name": "Industrial Pressure Transmitter DMP 331", "url": f"https://{domain}/prod/bd-sensors-gmbh/product-14047-1024694.html" }
-                    ]
-                },
-                {
-                    "name": "Level Probes & Transmitters",
-                    "url": f"https://{domain}/prod/bd-sensors-gmbh/level-measurement",
-                    "product_count": 1,
-                    "products": [
-                        { "name": "Submersible Level Probe LMK 351", "url": f"https://{domain}/prod/bd-sensors-gmbh/product-14047-1024695.html" }
-                    ]
-                }
-            ],
-            "mocked": True
-        }
-    return {
-        "success": True,
-        "domain": domain,
-        "robots": {
-            "sitemaps": [f"https://{domain}/sitemap.xml"],
-            "crawl_delay": 1
-        },
-        "llms_txt": f"# {domain} Catalog\n\nThis is a mock LLM discovery file for {domain}.\nWe offer high quality industrial components including pumps, motors, and pneumatic valves.",
-        "categories": [
-            {
-                "name": "Industrial Pumps",
-                "url": f"https://{domain}/collections/pumps",
-                "product_count": 4,
-                "products": [
-                    { "name": "Centrifugal Pump 5HP (Direct Buy)", "url": f"https://{domain}/products/pumps/centrifugal-5hp" },
-                    { "name": "Heavy Duty Slurry Pump 10HP (Quote Only)", "url": f"https://{domain}/products/pumps/slurry-10hp" },
-                    { "name": "Submersible Effluent Pump 2HP", "url": f"https://{domain}/products/pumps/submersible-2hp" },
-                    { "name": "High-Pressure Diaphragm Pump (Quote Only)", "url": f"https://{domain}/products/pumps/diaphragm-high" }
-                ]
-            },
-            {
-                "name": "Electric Motors",
-                "url": f"https://{domain}/collections/motors",
-                "product_count": 3,
-                "products": [
-                    { "name": "Three-Phase AC Induction Motor 15HP (Quote Only)", "url": f"https://{domain}/products/motors/three-phase-15hp" },
-                    { "name": "Single-Phase General Purpose Motor 1HP", "url": f"https://{domain}/products/motors/single-phase-1hp" },
-                    { "name": "Explosion Proof Motor 20HP (Quote Only)", "url": f"https://{domain}/products/motors/explosion-proof-20hp" }
-                ]
-            },
-            {
-                "name": "Control Valves",
-                "url": f"https://{domain}/collections/valves",
-                "product_count": 3,
-                "products": [
-                    { "name": "High-Pressure Brass Ball Valve 1/2\"", "url": f"https://{domain}/products/valves/ball-valve-half" },
-                    { "name": "Pneumatic Flow Control Valve 2\" (Quote Only)", "url": f"https://{domain}/products/valves/pneumatic-2in" },
-                    { "name": "Solenoid Water Valve 24V", "url": f"https://{domain}/products/valves/solenoid-24v" }
-                ]
-            }
-        ],
-        "mocked": True
-    }
+# Domain-agnostic scraping architecture
+
+def fetch_sitemap_urls_recursive(sitemap_url, visited=None, max_depth=3):
+    if visited is None:
+        visited = set()
+    if sitemap_url in visited or max_depth <= 0:
+        return []
+    visited.add(sitemap_url)
+    
+    extracted_urls = []
+    ignored_exts = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.css', '.js', '.pdf')
+    try:
+        r = http.get(sitemap_url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.content, "xml")
+            
+            # Check for sub-sitemaps in a sitemap index
+            sub_sitemaps = []
+            for sm in soup.find_all("sitemap"):
+                loc_tag = sm.find("loc")
+                if loc_tag and loc_tag.text:
+                    sub_sitemaps.append(loc_tag.text.strip())
+            
+            # Also catch any <loc> that points to an .xml sitemap file directly
+            for loc in soup.find_all("loc"):
+                val = loc.text.strip()
+                if ".xml" in val.lower() and val not in sub_sitemaps and val != sitemap_url:
+                    sub_sitemaps.append(val)
+                    
+            if sub_sitemaps:
+                for sub_sm in sub_sitemaps:
+                    extracted_urls.extend(fetch_sitemap_urls_recursive(sub_sm, visited, max_depth - 1))
+            else:
+                for loc in soup.find_all("loc"):
+                    val = loc.text.strip()
+                    if val and not val.lower().endswith(ignored_exts) and "cdn.shopify.com" not in val.lower():
+                        extracted_urls.append(val)
+    except Exception as e:
+        print(f"Error fetching sitemap {sitemap_url}: {e}")
+        
+    return extracted_urls
 
 @app.route('/crawl', methods=['POST'])
 def crawl_site():
@@ -825,12 +554,8 @@ def crawl_site():
 
     log_event(f"[System] Initializing crawler for domain: {domain}")
         
-    # Check if mock domain is requested or invalid
-    if "mock" in domain or "example" in domain or "test" in domain or "directindustry" in domain or not domain:
-        log_event("[System] Mock domain or invalid hostname detected. Loading fallback mock taxonomy...")
-        mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
-        mock_data["logs"] = logs
-        return jsonify(mock_data)
+    if not domain:
+        return jsonify({'error': 'Invalid domain'}), 400
         
     try:
         # 1. Fetch robots.txt
@@ -872,60 +597,58 @@ def crawl_site():
         except Exception:
             pass
             
-        # 3. Parse Sitemaps
+        # 3. Parse Sitemaps recursively
         discovered_products = []
         discovered_categories = []
         sitemap_parsed = False
         
         for sitemap in sitemaps:
-            log_event(f"[Sitemap] Fetching and parsing sitemap: {sitemap}")
-            try:
-                r_sm = http.get(sitemap, timeout=5, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-                if r_sm.status_code == 200:
-                    soup = BeautifulSoup(r_sm.content, "xml")
-                    locs = [loc.text for loc in soup.find_all("loc")]
-                    if locs:
-                        sitemap_parsed = True
-                        log_event(f"[Sitemap] Successfully extracted {len(locs)} URLs from sitemap")
+            log_event(f"[Sitemap] Recursively fetching sitemap tree starting at: {sitemap}")
+            all_locs = fetch_sitemap_urls_recursive(sitemap)
+            if all_locs:
+                sitemap_parsed = True
+                log_event(f"[Sitemap] Successfully extracted {len(all_locs)} total URLs from sitemap index")
+                
+                product_logged_count = 0
+                category_logged_count = 0
+                
+                for l in all_locs:
+                    # Explicitly ignore collections/all or similar catch-all URLs
+                    if "/collections/all" in l.lower():
+                        continue
                         
-                        product_logged_count = 0
-                        category_logged_count = 0
-                        
-                        for l in locs:
-                            l_parsed = urllib.parse.urlparse(l)
-                            path_parts = [p for p in l_parsed.path.split('/') if p]
-                            name = "Product"
-                            if path_parts:
-                                name = path_parts[-1].replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title()
+                    l_parsed = urllib.parse.urlparse(l)
+                    path_parts = [p for p in l_parsed.path.split('/') if p]
+                    name = "Product"
+                    if path_parts:
+                        name = path_parts[-1].replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title()
+                    
+                    classification = classify_url(l, name, domain, all_candidate_urls=all_locs, patterns=patterns)
+                    if classification == 'ignored':
+                        continue
+                    elif classification == 'category':
+                        if not any(cat["url"] == l for cat in discovered_categories):
+                            name_parts = [p for p in path_parts if p.lower() not in ['product-category', 'category', 'collections', 'collection', 'catalog', 'department']]
+                            cat_name = name
+                            if name_parts:
+                                cat_name = " > ".join([part.replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title() for part in name_parts])
                             
-                            classification = classify_url(l, name, domain, all_candidate_urls=locs, patterns=patterns)
-                            if classification == 'ignored':
-                                continue
-                            elif classification == 'category':
-                                if not any(cat["url"] == l for cat in discovered_categories):
-                                    name_parts = [p for p in path_parts if p.lower() not in ['product-category', 'category', 'collections', 'collection', 'catalog', 'department']]
-                                    cat_name = name
-                                    if name_parts:
-                                        cat_name = " > ".join([part.replace('.html', '').replace('.php', '').replace('-', ' ').replace('_', ' ').title() for part in name_parts])
-                                    
-                                    discovered_categories.append({"name": cat_name, "url": l, "products": []})
-                                    if category_logged_count < 10:
-                                        log_event(f"[Crawler] Classified sitemap URL as Category: {l} ({cat_name})")
-                                        category_logged_count += 1
-                                    elif category_logged_count == 10:
-                                        log_event("[Crawler] Discovered additional sitemap categories...")
-                                        category_logged_count += 1
-                            elif classification == 'product':
-                                if not any(p["url"] == l for p in discovered_products):
-                                    discovered_products.append({"name": name, "url": l})
-                                    if product_logged_count < 5:
-                                        log_event(f"[Crawler] Classified sitemap URL as Product: {l} ({name})")
-                                        product_logged_count += 1
-                                    elif product_logged_count == 5:
-                                        log_event("[Crawler] Discovered additional sitemap products...")
-                                        product_logged_count += 1
-            except Exception as sm_err:
-                log_event(f"[Sitemap] Error reading sitemap {sitemap}: {str(sm_err)}")
+                            discovered_categories.append({"name": cat_name, "url": l, "products": []})
+                            if category_logged_count < 10:
+                                log_event(f"[Crawler] Classified sitemap URL as Category: {l} ({cat_name})")
+                                category_logged_count += 1
+                            elif category_logged_count == 10:
+                                log_event("[Crawler] Discovered additional sitemap categories...")
+                                category_logged_count += 1
+                    elif classification == 'product':
+                        if not any(p["url"] == l for p in discovered_products):
+                            discovered_products.append({"name": name, "url": l})
+                            if product_logged_count < 5:
+                                log_event(f"[Crawler] Classified sitemap URL as Product: {l} ({name})")
+                                product_logged_count += 1
+                            elif product_logged_count == 5:
+                                log_event("[Crawler] Discovered additional sitemap products...")
+                                product_logged_count += 1
                 
         # 4. Fetch Homepage and parse links/schema if sitemaps did not return products
         if not sitemap_parsed or len(discovered_products) == 0:
@@ -1055,11 +778,16 @@ def crawl_site():
                     
         # Organize discovered products into categories
         if not discovered_categories and not discovered_products:
-            log_event("[Error] Crawl failed to find any products or categories. Displaying fallback taxonomy.")
-            mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
-            mock_data["warning"] = f"Could not reach {domain} or discover any products. Displaying fallback mock taxonomy."
-            mock_data["logs"] = logs
-            return jsonify(mock_data)
+            log_event("[Warning] Crawl completed with 0 discovered products or categories.")
+            return jsonify({
+                "success": True,
+                "domain": domain,
+                "robots": { "sitemaps": sitemaps, "crawl_delay": 1 },
+                "llms_txt": llms_txt,
+                "categories": [],
+                "warning": f"Could not discover any products or categories for {domain}.",
+                "logs": logs
+            })
 
         # Check if the input URL is a targeted category page
         is_targeted_category = (classify_url(url, "", domain, patterns=patterns) == 'category')
@@ -1133,11 +861,14 @@ def crawl_site():
         })
         
     except Exception as e:
-        log_event(f"[Error] Crawl failed with fatal exception: {str(e)}")
-        mock_data = get_mock_taxonomy(domain or "mock-vendor.com")
-        mock_data["warning"] = f"Crawl failed ({str(e)}). Displaying fallback mock taxonomy."
-        mock_data["logs"] = logs
-        return jsonify(mock_data)
+        log_event(f"[Error] Crawl failed with exception: {str(e)}")
+        return jsonify({
+            "success": False,
+            "domain": domain,
+            "error": str(e),
+            "categories": [],
+            "logs": logs
+        })
 
 WORLD_CURRENCIES = {
     # Symbols
