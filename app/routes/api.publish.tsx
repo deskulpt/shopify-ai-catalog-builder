@@ -489,11 +489,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     ];
 
-    // Process custom specifications mappings to Shopify metafields
-    if (specifications && specifications.length > 0 && metafieldMappings) {
+    // Process custom specifications mappings to Shopify metafields (with auto fallback to custom namespace)
+    if (specifications && specifications.length > 0) {
       specifications.forEach((spec: any) => {
-        const targetMetafield = metafieldMappings[spec.name];
-        if (targetMetafield && targetMetafield !== "skip") {
+        if (!spec.name || spec.value === undefined || spec.value === null) return;
+        
+        let targetMetafield = metafieldMappings ? metafieldMappings[spec.name] : null;
+        if (!targetMetafield || targetMetafield === "create_new" || targetMetafield === "auto") {
+          const keySlug = spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+          targetMetafield = `custom.${keySlug || "spec"}`;
+        }
+        
+        if (targetMetafield !== "skip") {
           const parts = targetMetafield.split(".");
           if (parts.length === 2) {
             const [ns, ky] = parts;

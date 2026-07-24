@@ -177,29 +177,38 @@ def apply_extraction_rules(html_content, rules: dict) -> dict:
                     pass
 
         # Extract structured key-value pairs from tables, definition lists, Tailwind grids, and list items
+        known_spec_keys = {
+            "HAIR MATERIAL", "PREMIUM MIX", "TEXTURE", "STYLE", "COLOR SHOWN", "AVAILABLE COLORS",
+            "LENGTH", "LENGTHS", "LACE TYPE", "INGREDIENTS", "MATERIAL", "WEIGHT", "DIMENSIONS",
+            "CARE INSTRUCTIONS", "FINISH", "BRAND", "SIZE"
+        }
+
         for row in soup.select("table tr, dl, ul.product-attributes, .specs-list, .product-details li, .ingredients-list, div[class*='grid'], div[class*='flex'], div[class*='spec']"):
             # Check grid/flex sibling pairs
             direct_divs = [c for c in row.find_all("div", recursive=False) if c.get_text(strip=True)]
             if len(direct_divs) >= 2:
                 for i in range(len(direct_divs) - 1):
-                    lbl = direct_divs[i].get_text(strip=True).rstrip(":")
-                    val = direct_divs[i+1].get_text(strip=True)
-                    if 3 <= len(lbl) <= 35 and len(val) > 0 and lbl.lower() not in ('price', 'title', 'sku', 'description', 'view more', 'find a store'):
-                        if lbl.isupper() or any(attr_k in lbl.upper() for attr_k in ['HAIR', 'MATERIAL', 'TEXTURE', 'STYLE', 'COLOR', 'LENGTH', 'LACE', 'INGREDIENT']):
+                    lbl = direct_divs[i].get_text(strip=True).rstrip(":").strip()
+                    val = direct_divs[i+1].get_text(strip=True).rstrip(",").strip()
+                    
+                    if lbl.upper() in known_spec_keys:
+                        metafields[lbl.upper()] = val
+                    elif 3 <= len(lbl) <= 35 and len(val) > 0 and lbl.lower() not in ('price', 'title', 'sku', 'description', 'view more', 'find a store'):
+                        if lbl.isupper() and not any(v_sub in lbl for v_sub in ['VIEW MORE', 'STORE', 'FIND']):
                             metafields[lbl] = val
 
             cells = row.select("td, th, dt, dd, strong, b, span")
             if len(cells) >= 2:
-                k = cells[0].get_text(strip=True).rstrip(":")
-                v = cells[1].get_text(strip=True)
+                k = cells[0].get_text(strip=True).rstrip(":").strip()
+                v = cells[1].get_text(strip=True).rstrip(",").strip()
                 if k and v and 3 <= len(k) <= 40 and k.lower() not in ('price', 'title', 'sku', 'description', 'view more', 'find a store'):
                     metafields[k] = v
             elif row.name == 'li' and (':' in row.get_text() or '-' in row.get_text()):
                 txt = row.get_text(strip=True)
                 if ':' in txt:
                     parts = txt.split(':', 1)
-                    k = parts[0].strip().rstrip(":")
-                    v = parts[1].strip()
+                    k = parts[0].strip().rstrip(":").strip()
+                    v = parts[1].strip().rstrip(",").strip()
                     if k and v and 3 <= len(k) <= 40:
                         metafields[k] = v
 
