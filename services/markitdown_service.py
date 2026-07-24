@@ -1818,6 +1818,12 @@ def extract_product():
     
     if not markdown and not url:
         return jsonify({'error': 'No Markdown or URL provided'}), 400
+
+    # Detect if the URL is a Category or Collection page instead of an individual product page
+    if url and classify_url(url, "", domain) == "category":
+        return jsonify({
+            'error': f"The URL '{url}' is a Category/Collection page containing multiple products. Please use Step 2 (Crawl & Categorize) to auto-discover and queue individual product pages under this category."
+        }), 400
         
     if is_login_page_markdown(markdown):
         return jsonify({
