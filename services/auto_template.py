@@ -5,58 +5,175 @@ import re
 
 logger = logging.getLogger(__name__)
 
-def apply_extraction_rules(html_content: str, rules: dict) -> dict:
+def apply_extraction_rules(html_content, rules: dict) -> dict:
     """
-    Applies CSS selector rules to extract product data deterministically.
-    rules format:
-    {
-       "title": {"selector": "h1.title", "attr": "text"},
-       "price": {"selector": ".price", "attr": "text"},
-       "images": {"selector": ".product-image img", "attr": "src", "multiple": True}
-    }
+    Applies CSS selector rules to extract product data deterministically with automatic fallback logic.
     """
+    if isinstance(html_content, bytes):
+        html_content = html_content.decode('utf-8', errors='ignore')
+
     soup = BeautifulSoup(html_content, "html.parser")
-    product = {}
+    product = {
+        "title": "",
+        "vendor": "",
+        "category": "",
+        "price": "0.00",
+        "sku": "",
+        "description": "",
+        "metafields": {},
+        "options": [],
+        "variants": [],
+        "images": []
+    }
+    
+    rules = rules or {}
     
     try:
-        # Extract basic fields
-        for field in ["title", "description"]:
-            if field in rules:
-                rule = rules[field]
-                el = soup.select_one(rule.get("selector", ""))
-                if el:
-                    val = el.get(rule.get("attr")) if rule.get("attr") and rule.get("attr") != "text" else el.get_text(separator="\n", strip=True)
-                    product[field] = val
+        # 1. Title Extraction with Fallbacks
+        title_val = ""
+        if "title" in rules and isinstance(rules["title"], dict):
+            rule = rules["title"]
+            sel = rule.get("selector", "")
+            if sel and sel != "title (AI Detected)":
+                try:
+                    el = soup.select_one(sel)
+                    if el:
+                        title_val = el.get(rule.get("attr")) if rule.get("attr") and rule.get("attr") != "text" else el.get_text(strip=True)
+                except Exception:
+                    pass
 
-        # Extract price and clean it
-        if "price" in rules:
+        if not title_val:
+            og_title = soup.select_one("meta[property='og:title']")
+            if og_title and og_title.get("content"):
+                title_val = og_title.get("content").strip()
+
+        if not title_val:
+            t_tag = soup.find("title")
+            if t_tag:
+                raw_t = t_tag.get_text(strip=True)
+                title_val = raw_t.split("-")[0].split("|")[0].strip()
+
+        if not title_val:
+            h1 = soup.find(["h1", "h2"])
+            if h1:
+                title_val = h1.get_text(strip=True)
+
+        product["title"] = title_val or "Extracted Product"
+
+        # 2. Description Extraction with Fallbacks
+        desc_val = ""
+        if "description" in rules and isinstance(rules["description"], dict):
+            rule = rules["description"]
+            sel = rule.get("selector", "")
+            if sel:
+                try:
+                    el = soup.select_one(sel)
+                    if el:
+                        desc_val = el.get(rule.get("attr")) if rule.get("attr") and rule.get("attr") != "text" else el.get_text(separator="\n", strip=True)
+                except Exception:
+                    pass
+
+        if not desc_val:
+            og_desc = soup.select_one("meta[property='og:description']") or soup.select_one("meta[name='description']")
+            if og_desc and og_desc.get("content"):
+                desc_val = og_desc.get("content").strip()
+
+        if not desc_val:
+            desc_el = soup.select_one(".product-description, .description, #tab-description, .entry-content, p")
+            if desc_el:
+                desc_val = desc_el.get_text(separator="\n", strip=True)
+
+        product["description"] = desc_val
+
+        # 3. Price Extraction with Fallbacks
+        price_val = "0.00"
+        if "price" in rules and isinstance(rules["price"], dict):
             rule = rules["price"]
-            el = soup.select_one(rule.get("selector", ""))
-            if el:
-                val = el.get(rule.get("attr")) if rule.get("attr") and rule.get("attr") != "text" else el.get_text(strip=True)
-                # Naive price extraction from text
-                price_match = re.search(r'[\d,\.]+', val)
-                if price_match:
-                    product["price"] = price_match.group(0)
+            sel = rule.get("selector", "")
+            if sel:
+                try:
+                    el = soup.select_one(sel)
+                    if el:
+                        raw_p = el.get_text(strip=True)
+                        price_match = re.search(r'[\d,\.]+', raw_p)
+                        if price_match:
+                            price_val = price_match.group(0)
+                except Exception:
+                    pass
 
-        # Extract images
-        if "images" in rules:
+        if price_val == "0.00":
+            body_text = soup.get_text()
+            price_match = re.search(r'\$\s*([\d,]+\.\d{2})', body_text)
+            if price_match:
+                price_val = price_match.group(1)
+
+        product["price"] = price_val
+
+        # 4. Images Extraction with Fallbacks
+        images = []
+        if "images" in rules and isinstance(rules["images"], dict):
             rule = rules["images"]
-            images = []
-            for el in soup.select(rule.get("selector", "")):
-                src = el.get(rule.get("attr", "src"))
-                if src:
-                    images.append({"url": src})
-            product["images"] = images
+            sel = rule.get("selector", "")
+            if sel:
+                try:
+                    for el in soup.select(sel):
+                        src = el.get(rule.get("attr", "src"))
+                        if src:
+                            images.append({"url": src, "alt": el.get("alt", "")})
+                except Exception:
+                    pass
 
-        # Validation: Must have at least a title
-        if not product.get("title"):
-            raise ValueError("Template broken: Failed to extract title.")
-            
+        if not images:
+            og_img = soup.select_one("meta[property='og:image']")
+            if og_img and og_img.get("content"):
+                images.append({"url": og_img.get("content"), "alt": product["title"]})
+
+        if not images:
+            for img in soup.select(".gallery img, .product-image img, main img")[:5]:
+                src = img.get("src") or img.get("data-src")
+                if src and not src.endswith('.svg') and 'logo' not in src.lower():
+                    images.append({"url": src, "alt": img.get("alt", "")})
+
+        product["images"] = images
+
+        # 5. Vendor Extraction
+        if "vendor" in rules and isinstance(rules["vendor"], dict):
+            rule = rules["vendor"]
+            sel = rule.get("selector", "")
+            if sel:
+                try:
+                    el = soup.select_one(sel)
+                    if el:
+                        product["vendor"] = el.get_text(strip=True)
+                except Exception:
+                    pass
+
+        # 6. Metafields / Specifications Extraction
+        metafields = {}
+        meta_rules = (rules.get("metafields") or {}) if isinstance(rules.get("metafields"), dict) else {}
+        for mk, mrule in meta_rules.items():
+            if isinstance(mrule, dict) and mrule.get("selector"):
+                try:
+                    el = soup.select_one(mrule["selector"])
+                    if el:
+                        metafields[mk] = el.get_text(strip=True)
+                except Exception:
+                    pass
+
+        if not metafields:
+            for row in soup.select("table tr, dl"):
+                cells = row.select("td, th, dt, dd")
+                if len(cells) >= 2:
+                    k = cells[0].get_text(strip=True).rstrip(":")
+                    v = cells[1].get_text(strip=True)
+                    if k and v and len(k) < 40:
+                        metafields[k] = v
+
+        product["metafields"] = metafields
         return product
     except Exception as e:
         logger.error(f"Failed to apply extraction rules: {e}")
-        return None
+        return product
 
 def build_gemini_template_prompt(html_content: str) -> str:
     return f"""

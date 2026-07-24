@@ -265,40 +265,51 @@ def preprocess_html_content(html_bytes):
                 node.decompose()
 
         for tag in soup.find_all('script'):
-            stype = (tag.get('type') or '').lower()
-            if 'json' not in stype and 'ld+json' not in stype:
-                tag.decompose()
+            if hasattr(tag, 'get'):
+                stype = str(tag.get('type') or '').lower()
+                if 'json' not in stype and 'ld+json' not in stype:
+                    tag.decompose()
                 
         # 2. Remove elements with classes/ids often used for noise
         noisy_patterns = ['menu', 'footer', 'nav', 'sidebar', 'cart', 'drawer', 'popup', 'modal', 'announcement', 'cookie', 'newsletter', 'subscribe', 'banner']
         
-        for elem in soup.find_all(True):
-            if elem.get('class'):
-                class_str = ' '.join(elem.get('class')).lower()
-                if any(p in class_str for p in noisy_patterns):
-                    elem.decompose()
+        for elem in list(soup.find_all(True)):
+            try:
+                if not getattr(elem, 'name', None):
                     continue
+                classes = elem.get('class') if hasattr(elem, 'get') else None
+                if classes:
+                    class_str = ' '.join(classes) if isinstance(classes, list) else str(classes)
+                    if any(p in class_str.lower() for p in noisy_patterns):
+                        elem.decompose()
+                        continue
             
-            if elem.get('id'):
-                id_str = str(elem.get('id')).lower()
-                if any(p in id_str for p in noisy_patterns):
-                    elem.decompose()
-                    continue
+                elem_id = elem.get('id') if hasattr(elem, 'get') else None
+                if elem_id:
+                    if any(p in str(elem_id).lower() for p in noisy_patterns):
+                        elem.decompose()
+                        continue
+            except Exception:
+                pass
 
         # 3. Process onclick pdf/link handling
-        for tag in soup.find_all(attrs={"onclick": True}):
-            onclick = tag["onclick"]
-            match = re.search(r"window\.open\s*\(\s*['\"]([^'\"]+)['\"]", onclick)
-            if match:
-                target_url = match.group(1)
-                if target_url.startswith(('http://', 'https://', '/')) or '.pdf' in target_url.lower():
-                    if tag.name != 'a' and not tag.find('a'):
-                        a_tag = soup.new_tag("a", href=target_url)
-                        for child in list(tag.contents):
-                            a_tag.append(child)
-                        tag.clear()
-                        tag.append(a_tag)
-                        del tag["onclick"]
+        try:
+            for tag in soup.find_all(attrs={"onclick": True}):
+                if hasattr(tag, "get") and tag.get("onclick"):
+                    onclick = str(tag.get("onclick"))
+                    match = re.search(r"window\.open\s*\(\s*['\"]([^'\"]+)['\"]", onclick)
+                    if match:
+                        target_url = match.group(1)
+                        if target_url.startswith(('http://', 'https://', '/')) or '.pdf' in target_url.lower():
+                            if getattr(tag, 'name', '') != 'a' and hasattr(tag, 'find') and not tag.find('a'):
+                                a_tag = soup.new_tag("a", href=target_url)
+                                for child in list(tag.contents):
+                                    a_tag.append(child)
+                                tag.clear()
+                                tag.append(a_tag)
+                                del tag["onclick"]
+        except Exception:
+            pass
         
         return str(soup).encode('utf-8')
     except Exception as e:
@@ -1819,9 +1830,10 @@ def extract_product():
     # Try deterministic fast path
     if extraction_rules and url:
         try:
-            html_content = preprocess_html_content(http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content)
+            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_content = preprocess_html_content(html_raw)
             deterministic_product = apply_extraction_rules(html_content, extraction_rules)
-            if deterministic_product:
+            if deterministic_product and deterministic_product.get("title"):
                 return jsonify({
                     "success": True,
                     "product": deterministic_product
@@ -1832,12 +1844,14 @@ def extract_product():
     # Fallback / Generation path
     if gemini_key and url:
         try:
-            html_content = preprocess_html_content(http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content)
-            gemini_unified_prompt = build_gemini_template_prompt(html_content)
+            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_content = preprocess_html_content(html_raw)
+            html_str = html_content.decode('utf-8', errors='ignore') if isinstance(html_content, bytes) else str(html_content)
+            gemini_unified_prompt = build_gemini_template_prompt(html_str)
             result = extract_with_gemini(gemini_unified_prompt)
             
-            # If the extraction succeeded, return the product and the newly generated rules to Node.js
-            if result and "product" in result:
+            # If the extraction succeeded, return the product and the newly generated rules
+            if result and "product" in result and isinstance(result["product"], dict) and result["product"].get("title"):
                 return jsonify({
                     "success": True,
                     "product": result["product"],
@@ -1846,7 +1860,7 @@ def extract_product():
         except Exception as e:
             logger.error(f"Gemini rule generation failed: {e}")
 
-    # Fallback to standard OpenAI if everything else fails
+    # Fallback to standard OpenAI if available
     if openai_key:
         try:
             raw_prompt = load_backup_prompt()
@@ -1862,6 +1876,20 @@ def extract_product():
             result = json.loads(response.choices[0].message.content)
         except Exception:
             pass
+
+    # Safety Net Fallback: Resilient HTML parser fallback using meta tags and BeautifulSoup
+    if url:
+        try:
+            html_raw = http.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).content
+            html_content = preprocess_html_content(html_raw)
+            fallback_prod = apply_extraction_rules(html_content, {})
+            if fallback_prod and fallback_prod.get("title"):
+                return jsonify({
+                    "success": True,
+                    "product": fallback_prod
+                })
+        except Exception as err:
+            logger.error(f"Safety net extraction failed: {err}")
             
     # Parse and normalize results
     if result:
