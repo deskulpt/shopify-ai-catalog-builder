@@ -3,7 +3,8 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
 
   if (request.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
@@ -22,19 +23,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     let extractionRules = undefined;
     if (profileId) {
-      const profile = await prisma.crawlProfile.findUnique({
-        where: { id: profileId },
+      const profile = await prisma.crawlProfile.findFirst({
+        where: { id: profileId, shop },
       });
       if (profile && profile.extractionRules) {
         try {
           extractionRules = JSON.parse(profile.extractionRules);
-        } catch (e) {}
+        } catch {
+          // Ignore malformed extraction rules JSON.
+        }
       }
     } else if (domain || url) {
       const targetSearch = domain || (url ? new URL(url).hostname : "");
       if (targetSearch) {
         const profile = await prisma.crawlProfile.findFirst({
           where: {
+            shop,
             OR: [
               { rootUrl: { contains: targetSearch } },
               { name: { contains: targetSearch } }
@@ -44,7 +48,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (profile && profile.extractionRules) {
           try {
             extractionRules = JSON.parse(profile.extractionRules);
-          } catch (e) {}
+          } catch {
+            // Ignore malformed extraction rules JSON.
+          }
         }
       }
     }
@@ -69,8 +75,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // Auto-heal or first-time generation of rules
     if (profileId && resData.extraction_rules) {
-      await prisma.crawlProfile.update({
-        where: { id: profileId },
+      await prisma.crawlProfile.updateMany({
+        where: { id: profileId, shop },
         data: { extractionRules: JSON.stringify(resData.extraction_rules) },
       });
     }

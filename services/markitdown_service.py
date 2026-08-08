@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from markitdown import MarkItDown
+import logging
 import os
 import sys
 import tempfile
@@ -25,6 +26,7 @@ from moa_extraction import enhance_extraction, batch_extract_moa
 
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 md = MarkItDown()
 
 PUBLIC_EXTRACTED_DIR = os.path.join(
@@ -268,6 +270,9 @@ def matches_category_segments(cat_url, prod_url):
     # Check if cat_segs is a prefix of prod_segs
     if len(cat_segs) > len(prod_segs):
         return False
+
+    return prod_segs[:len(cat_segs)] == cat_segs
+
 def fetch_html_rendered_bytes(url: str) -> bytes:
     """Fetches HTML with Playwright headless browser rendering if available to capture client-side hydrated DOM, attributes, and variant images."""
     try:

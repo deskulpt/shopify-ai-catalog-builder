@@ -29,6 +29,9 @@ export const apiVersion = ApiVersion.October25;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 let mockAuthenticate: any = null;
 export function setMockAuthenticate(mock: any) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("setMockAuthenticate is not available in production");
+  }
   mockAuthenticate = mock;
 }
 

@@ -1,4 +1,6 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+
 const json = (data: unknown, init?: ResponseInit) => Response.json(data, init);
 
 /**
@@ -16,6 +18,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (request.method !== "GET") {
     return json({ error: "Method not allowed" }, { status: 405 });
   }
+
+  await authenticate.admin(request);
 
   try {
     const response = await fetch(`${MARKITDOWN_SERVICE_URL}/pdf-config`, {
@@ -40,6 +44,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method === "PUT") {
+    await authenticate.admin(request);
+
     try {
       const body = await request.json();
 

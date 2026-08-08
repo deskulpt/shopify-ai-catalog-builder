@@ -23,13 +23,13 @@ services:
     startCommand: npm run setup && npm start
     envVars:
       - key: SHOPIFY_API_KEY
-        value: bc52c6b4dded536b8abfa06a7a518439
+        sync: false
       - key: SHOPIFY_API_SECRET
-        value: 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
+        sync: false
       - key: SCOPES
         value: write_metaobject_definitions,write_metaobjects,write_products
       - key: SHOPIFY_APP_URL
-        value: https://product-ingest-ai-node.onrender.com
+        sync: false
       - key: MARKITDOWN_SERVICE_URL
         sync: false
       - key: NODE_ENV

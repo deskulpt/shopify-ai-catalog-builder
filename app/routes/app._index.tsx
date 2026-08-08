@@ -627,7 +627,7 @@ export default function Index() {
         const sampleCatUrlStr = categoryUrls[randomIndex] || categoryUrls[0];
         try {
           const catUrl = new URL(sampleCatUrlStr);
-          let path = catUrl.pathname;
+          const path = catUrl.pathname;
           if (path.includes("/collections/")) {
              setProfileCategoryPatternInput("/collections/");
           } else {
@@ -635,7 +635,9 @@ export default function Index() {
              if (parts.length > 0) setProfileCategoryPatternInput("/" + parts[0] + "/");
           }
           setDetectedCategoryExample(sampleCatUrlStr);
-        } catch (_) {}
+        } catch {
+          // Ignore malformed category sample URLs.
+        }
       }
 
       if (productUrls.length > 0) {
@@ -643,7 +645,7 @@ export default function Index() {
         const sampleProdUrlStr = productUrls[randomIndex] || productUrls[0];
         try {
           const prodUrl = new URL(sampleProdUrlStr);
-          let path = prodUrl.pathname;
+          const path = prodUrl.pathname;
           if (path.includes("/products/")) {
              setProfileProductPatternInput("/products/");
           } else {
@@ -653,7 +655,9 @@ export default function Index() {
           setDetectedProductExample(sampleProdUrlStr);
           // Auto-fill Sample Product URL for blueprint schema generator
           setProfileSampleUrl(sampleProdUrlStr);
-        } catch (_) {}
+        } catch {
+          // Ignore malformed product sample URLs.
+        }
       }
 
       shopify.toast.show("Pattern detection complete & sample URL populated!");
@@ -996,7 +1000,7 @@ export default function Index() {
     } else {
       let flatIdx = 0;
       groups.forEach((group: any) => {
-        group.variants.forEach((v: any) => {
+        group.variants.forEach((_v: any) => {
           catKeys.push(`${catName}::standalone::${flatIdx}`);
           flatIdx++;
         });
@@ -2068,7 +2072,7 @@ export default function Index() {
         Object.entries(groupedCategories).forEach(([catName, groups]) => {
           let flatIdx = 0;
           groups.forEach((group: any) => {
-            group.variants.forEach((v: any) => {
+            group.variants.forEach((_v: any) => {
               allStandaloneKeys.push(`${catName}::standalone::${flatIdx}`);
               flatIdx++;
             });
@@ -2145,7 +2149,7 @@ export default function Index() {
   };
 
   return (
-    <s-page heading="Product Ingest AI" full-width style={{ width: "100%", maxWidth: "100%" }}>
+    <s-page heading="Product Ingest AI" full-width>
       <style>{`
         :root {
           --pc-page-max-width: 100% !important;
@@ -3536,7 +3540,7 @@ export default function Index() {
                       type="checkbox"
                       id="group-toggle"
                       checked={groupSimilar}
-                      onChange={(e) => handleGroupToggle(e.target.checked)}
+                      onChange={(e) => handleGroupSimilarToggle(e.target.checked)}
                       style={{ cursor: "pointer", width: "16px", height: "16px" }}
                     />
                     <label htmlFor="group-toggle" style={{ cursor: "pointer", fontWeight: "bold" }}>
@@ -3597,7 +3601,7 @@ export default function Index() {
                     } else {
                       let flatIdx = 0;
                       groups.forEach((group: any) => {
-                        group.variants.forEach((v: any) => {
+                        group.variants.forEach((_v: any) => {
                           catKeysForCat.push(`${catName}::standalone::${flatIdx}`);
                           flatIdx++;
                         });
@@ -4727,7 +4731,7 @@ export default function Index() {
                                 </button>
                                 <button 
                                   type="button"
-                                  onClick={handleOpenReviewModal}
+                                  onClick={() => handleOpenReviewModal()}
                                   disabled={!extractedProduct}
                                   style={{
                                     padding: "8px 12px",
@@ -5735,6 +5739,90 @@ export default function Index() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
+
+type ParsedMarkdownProduct = {
+  title: string;
+  short_description: string;
+  sku: string;
+  price: string;
+  specifications: Array<{ name: string; value: string; displayValue: string }>;
+  media_links: [];
+  file_links: [];
+};
+
+// Lightweight fallback parser for review modal when structured extraction is unavailable.
+function parseMarkdownToProduct(md: string): ParsedMarkdownProduct | null {
+  if (!md || !md.trim()) return null;
+
+  let title = "";
+  let sku = "";
+  let price = "0.00";
+  let inSpecs = false;
+  const specifications: ParsedMarkdownProduct["specifications"] = [];
+  const descriptionLines: string[] = [];
+
+  for (const rawLine of md.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    if (!title) {
+      const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+      if (headingMatch) {
+        title = headingMatch[1].trim();
+        continue;
+      }
+    }
+
+    const skuMatch = line.match(/^SKU:\s*(.+)$/i);
+    if (skuMatch) {
+      sku = skuMatch[1].trim();
+      continue;
+    }
+
+    const priceMatch = line.match(/^Price:\s*\$?([\d,.]+)/i);
+    if (priceMatch) {
+      price = priceMatch[1].replace(/,/g, "");
+      continue;
+    }
+
+    if (/^specifications?:?$/i.test(line.replace(/^#+\s*/, ""))) {
+      inSpecs = true;
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+    if (inSpecs && bulletMatch) {
+      const specText = bulletMatch[1].trim();
+      const colonIdx = specText.indexOf(":");
+      if (colonIdx > 0) {
+        const name = specText.slice(0, colonIdx).trim();
+        const value = specText.slice(colonIdx + 1).trim();
+        specifications.push({ name, value, displayValue: value });
+      } else {
+        specifications.push({ name: specText, value: "", displayValue: specText });
+      }
+      continue;
+    }
+
+    if (!inSpecs && !line.startsWith("|")) {
+      descriptionLines.push(line);
+    }
+  }
+
+  if (!title && !sku && specifications.length === 0 && descriptionLines.length === 0) {
+    return null;
+  }
+
+  return {
+    title: title || "Extracted Product",
+    short_description: descriptionLines.join("\n").trim(),
+    sku,
+    price,
+    specifications,
+    media_links: [],
+    file_links: [],
+  };
+}
 
 // Helper to convert basic Markdown to shopify-compatible HTML in real-time
 function parseMarkdownToHtml(md: string): string {
